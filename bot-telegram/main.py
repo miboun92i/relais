@@ -118,12 +118,14 @@ async def main():
     if not os.getenv('TELEGRAM_API_ID') or not os.getenv('TELEGRAM_API_HASH'):
         raise SystemExit('Remplis TELEGRAM_API_ID et TELEGRAM_API_HASH dans .env.')
     provider = os.getenv('AI_PROVIDER', 'ollama')
-    if provider not in ('ollama', 'anthropic'):
-        raise SystemExit('AI_PROVIDER doit être ollama ou anthropic.')
+    if provider not in ('ollama', 'anthropic', 'openai'):
+        raise SystemExit('AI_PROVIDER doit être ollama, anthropic ou openai.')
     if provider == 'ollama' and not os.getenv('OLLAMA_MODEL', '').strip():
         raise SystemExit('Renseigne OLLAMA_MODEL dans .env avec le nom du modèle installé sur ton serveur.')
     if provider == 'anthropic' and not os.getenv('ANTHROPIC_API_KEY'):
         raise SystemExit('ANTHROPIC_API_KEY est nécessaire avec Anthropic.')
+    if provider == 'openai' and not os.getenv('OPENAI_API_KEY'):
+        raise SystemExit('OPENAI_API_KEY est nécessaire avec OpenAI.')
     try:
         api_id = int(os.environ['TELEGRAM_API_ID'])
         ignored = {int(x.strip()) for x in os.getenv('IGNORE_CHAT_IDS', '').split(',') if x.strip()}
@@ -140,13 +142,25 @@ async def main():
     client = TelegramClient(str(ROOT / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
     http = ClientSession(timeout=ClientTimeout(total=55))
     anthropic_client = None
+    openai_client = None
     if provider == 'anthropic':
         from anthropic import AsyncAnthropic
         anthropic_client = AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'], timeout=50, max_retries=0)
+    elif provider == 'openai':
+        from openai import AsyncOpenAI
+        openai_client = AsyncOpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=50, max_retries=0)
     async def generate(prompt, messages):
         if provider == 'anthropic':
             result = await anthropic_client.messages.create(model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-5'), max_tokens=500, system=prompt, messages=messages)
             return ''.join(block.text for block in result.content if block.type == 'text')
+        if provider == 'openai':
+            result = await openai_client.responses.create(
+                model=os.getenv('OPENAI_MODEL', 'gpt-5-mini'),
+                instructions=prompt,
+                input=messages,
+                max_output_tokens=500,
+            )
+            return result.output_text
         ollama_url = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
         parsed = urlparse(ollama_url)
         if parsed.scheme not in ('http', 'https') or not parsed.netloc:
@@ -216,6 +230,8 @@ async def main():
         await http.close()
         if anthropic_client:
             await anthropic_client.close()
+        if openai_client:
+            await openai_client.close()
         store.db.close()
 
 if __name__ == '__main__':
