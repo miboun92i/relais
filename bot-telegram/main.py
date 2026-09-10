@@ -10,6 +10,7 @@ from core import Engine, Store
 from auth import Auth, LoginFailed, TooManyAttempts
 
 ROOT = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv('DATA_DIR', str(ROOT))).resolve()
 
 def make_app(engine, authenticator, origins, is_connected, provider):
     @web.middleware
@@ -114,7 +115,7 @@ def make_app(engine, authenticator, origins, is_connected, provider):
 async def main():
     os.umask(0o077)
     load_dotenv(ROOT / '.env')
-    authenticator = Auth.from_file(ROOT / 'panel-account.json')
+    authenticator = Auth.from_file(DATA_DIR / 'panel-account.json')
     if not os.getenv('TELEGRAM_API_ID') or not os.getenv('TELEGRAM_API_HASH'):
         raise SystemExit('Remplis TELEGRAM_API_ID et TELEGRAM_API_HASH dans .env.')
     provider = os.getenv('AI_PROVIDER', 'ollama')
@@ -135,11 +136,11 @@ async def main():
     origins = {s.strip().rstrip('/') for s in os.getenv('PANEL_ORIGINS', '').split(',') if s.strip()}
     if not origins or '*' in origins:
         raise SystemExit('Renseigne PANEL_ORIGINS avec l’adresse exacte du panel, sans chemin.')
-    store = Store(ROOT / 'conversations.sqlite3')
+    store = Store(DATA_DIR / 'conversations.sqlite3')
     settings = store.settings()
     settings['enabled'] = False
     store.save_settings(settings)
-    client = TelegramClient(str(ROOT / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
+    client = TelegramClient(str(DATA_DIR / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
     http = ClientSession(timeout=ClientTimeout(total=55))
     anthropic_client = None
     openai_client = None
