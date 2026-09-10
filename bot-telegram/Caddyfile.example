@@ -1,0 +1,4 @@
+# Remplacer par le domaine qui pointe vers votre serveur.
+telegram.votre-domaine.fr {
+    reverse_proxy 127.0.0.1:8787
+}

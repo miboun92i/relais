@@ -1,0 +1,8 @@
+.env
+*.session*
+.venv/
+__pycache__/
+panel-key.txt
+panel-account.json
+panel-account.tmp
+*.sqlite3*

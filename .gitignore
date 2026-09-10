@@ -1,0 +1,27 @@
+# Secrets / identifiants
+.env
+.env.*
+!.env.example
+panel-account.json
+compte.session
+*.session
+*.session-journal
+
+# Bases de données
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
