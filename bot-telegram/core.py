@@ -16,6 +16,27 @@ class HumanHandoffRequired(ValueError):
     """La réponse exige une intervention humaine, sans être une panne IA."""
 
 
+class DailyLimitReached(ValueError):
+    """Le plafond local interdit de nouveaux appels IA aujourd'hui."""
+
+
+def temporary_ai_error(error):
+    """Reconnaître les pannes temporaires sans réessayer les erreurs de configuration."""
+    status = getattr(error, 'status_code', None) or getattr(error, 'status', None)
+    if status is not None:
+        return status in (408, 429, 500, 502, 503, 504)
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return True
+    # Classes des fournisseurs optionnels et d'aiohttp, sans imposer leurs imports.
+    return any(cls.__name__ in ('APIConnectionError', 'APITimeoutError', 'ClientConnectionError')
+               for cls in type(error).__mro__)
+
+
+def plain_response(text):
+    # Telegram reçoit du texte brut : retirer les marqueurs de gras générés.
+    return text.replace('**', '').strip()
+
+
 DEFAULTS = {'enabled': False, 'tone': 'Réponds en français, avec un ton chaleureux et naturel. Reste concise.', 'catalog': '', 'faq': '', 'daily_limit': 100}
 BASE_PROMPT = '''Tu es l'assistant Telegram du propriétaire de ce compte.
 Réponds aux clients en te basant uniquement sur les informations ci-dessous.
@@ -129,7 +150,7 @@ class Store:
     def reserve(self):
         day = datetime.now(timezone.utc).date().isoformat()
         if self.usage() >= self.settings()['daily_limit']:
-            raise ValueError('Plafond quotidien de demandes IA atteint.')
+            raise DailyLimitReached('Plafond quotidien de demandes IA atteint.')
         self.db.execute('INSERT INTO usage VALUES(?,1) ON CONFLICT(day) DO UPDATE SET count=count+1', (day,))
         self.db.commit()
 
@@ -148,7 +169,7 @@ class Store:
         self.db.commit()
 
 class Engine:
-    def __init__(self, store, transport, generate, mark_read=None, simulate_typing=None, delay_min=1.8, delay_max=3.8, *, delay=None):
+    def __init__(self, store, transport, generate, mark_read=None, simulate_typing=None, delay_min=1.8, delay_max=3.8, *, delay=None, retry_delays=(5, 15)):
         self.store = store
         self.transport = transport
         self.generate = generate
@@ -159,7 +180,35 @@ class Engine:
         self.epoch = 0
         self.locks, self.tasks = {}, set()
         self.capacity = asyncio.Semaphore(2)
-        self.last_error = None
+        self.errors = {}
+        self.retry_delays = retry_delays
+
+    @property
+    def last_error(self):
+        return '\n'.join(self.errors.values()) or None
+
+    def report_error(self, chat_id, message):
+        self.errors.pop(chat_id, None)
+        self.errors[chat_id] = f'Conversation {chat_id} : {message}'
+        # Garder une mémoire bornée ; le détail historique reste dans les logs.
+        if len(self.errors) > 20:
+            self.errors.pop(next(iter(self.errors)))
+
+    async def automatic_draft(self, chat_id, revision, epoch):
+        for attempt in range(len(self.retry_delays) + 1):
+            if not self.valid(chat_id, revision, epoch):
+                return None
+            try:
+                return await self.draft(chat_id, manual_on_handoff=False)
+            except Exception as error:
+                if not temporary_ai_error(error) or attempt == len(self.retry_delays):
+                    raise
+                if not self.valid(chat_id, revision, epoch):
+                    return None
+                delay = self.retry_delays[attempt]
+                self.report_error(chat_id, f'Erreur IA temporaire ; nouvelle tentative dans {delay} s.')
+                logger.warning('IA ; conversation %s : tentative %s échouée (%s)', chat_id, attempt + 1, type(error).__name__)
+                await asyncio.sleep(delay)
 
     def lock(self, chat_id):
         return self.locks.setdefault(chat_id, asyncio.Lock())
@@ -205,9 +254,13 @@ class Engine:
                 if manual_on_handoff:
                     self.set_mode(chat_id, 'manual')
                 raise HumanHandoffRequired('Cette réponse nécessite une reprise personnelle.')
+            text = plain_response(text)
+            if not text:
+                raise ValueError('L’IA a renvoyé une réponse vide après nettoyage.')
             return text[:4000]
 
     async def auto_reply(self, chat_id, revision, epoch):
+        delivery_uncertain = False
         try:
             # Petite fenêtre d'attente : si le client envoie plusieurs messages
             # à la suite, seules les données de la révision la plus récente seront traitées.
@@ -229,11 +282,11 @@ class Engine:
 
             handoff = None
             try:
-                reply = await self.draft(chat_id, manual_on_handoff=False)
+                reply = await self.automatic_draft(chat_id, revision, epoch)
             except HumanHandoffRequired as error:
                 handoff = str(error)
                 reply = 'ta les cramptés ?'
-            if not self.valid(chat_id, revision, epoch):
+            if reply is None or not self.valid(chat_id, revision, epoch):
                 return
 
             async with self.lock(chat_id):
@@ -241,28 +294,38 @@ class Engine:
                     return
                 # Garder le même verrou pour la saisie et l'envoi.
                 if self.simulate_typing:
-                    await self.simulate_typing(chat_id, reply)
+                    try:
+                        await self.simulate_typing(chat_id, reply)
+                    except Exception as error:
+                        logger.exception('Saisie Telegram ; conversation %s : %s', chat_id, type(error).__name__)
                 if not self.valid(chat_id, revision, epoch):
                     return
                 try:
                     message_id = await self.transport(chat_id, reply)
                     self.store.add(chat_id, message_id, 'ai', reply)
+                except Exception:
+                    delivery_uncertain = True
+                    self.report_error(chat_id, 'Envoi ou enregistrement incertain. Aucun renvoi automatique ; vérifiez Telegram.')
+                    raise
                 finally:
                     if handoff:
                         self.set_mode(chat_id, 'manual')
-                        self.last_error = 'Reprise humaine nécessaire. Vérifiez la conversation dans Telegram.'
+                        if not delivery_uncertain:
+                            self.report_error(chat_id, 'Reprise humaine nécessaire. Vérifiez la conversation dans Telegram.')
                         logger.warning('Relais humain ; conversation %s : %s', chat_id, handoff)
                 print('Telegram : réponse automatique envoyée.', flush=True)
                 if not handoff:
-                    self.last_error = None
+                    self.errors.pop(chat_id, None)
         except asyncio.CancelledError:
             raise
         except HumanHandoffRequired as error:
-            self.last_error = str(error)
+            self.report_error(chat_id, str(error))
             logger.warning('Relais humain ; conversation %s : %s', chat_id, error)
+        except DailyLimitReached:
+            self.report_error(chat_id, 'Plafond quotidien IA atteint. Nouveaux appels possibles après minuit UTC ou modification du plafond.')
         except Exception as error:
-            if self.valid(chat_id, revision, epoch):
-                self.last_error = 'Une réponse automatique a échoué. Le mode automatique reste actif pour les prochains messages. Consultez les logs.'
+            if self.valid(chat_id, revision, epoch) and not delivery_uncertain:
+                self.report_error(chat_id, 'Réponse automatique échouée (' + type(error).__name__ + '). Mode auto conservé pour les prochains messages ; consultez les logs.')
             logger.exception('Réponse automatique ; conversation %s : %s: %s', chat_id, type(error).__name__, error)
 
     async def outgoing(self, chat_id, message_id, text, created=None):

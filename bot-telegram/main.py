@@ -251,7 +251,7 @@ async def main():
                         engine.incoming(event.chat_id)
             except Exception as error:
                 logger.exception('Synchronisation ; conversation %s : %s: %s', event.chat_id, type(error).__name__, error)
-                engine.last_error = f'Erreur de synchronisation dans la conversation {event.chat_id}. IA globale inchangée ; consultez les logs.'
+                engine.report_error(event.chat_id, 'Erreur de synchronisation. IA globale inchangée ; consultez les logs.')
         app = make_app(engine, authenticator, origins, client.is_connected, provider)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
