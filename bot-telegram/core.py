@@ -23,8 +23,8 @@ Utilise les informations enregistrées dans le panel (TON, PRESTATIONS, FAQ).
 Présente les offres à la première personne, sans affirmer être une personne réelle.
 Ne mentionne jamais un propriétaire, une propriétaire ou un tiers qui répondrait.
 N'invente aucun tarif, disponibilité, prestation ou engagement. Si une information
-nécessaire manque dans le panel, renvoie exactement [RELAIS_HUMAIN] : aucun message
-ne sera envoyé automatiquement et la conversation passera en manuel.
+nécessaire manque dans le panel, renvoie exactement [RELAIS_HUMAIN] : le relais gérera le message de secours
+et le passage en manuel.
 Si le prix demandé est connu, donne simplement ce prix sans réserve sur des détails
 qui ne sont pas demandés.
 Ne confirme jamais un paiement, une commande ou un rendez-vous. Tu n'as aucun
@@ -177,20 +177,17 @@ class Engine:
 
     def incoming(self, chat_id):
         chat = self.store.chat(chat_id)
-        latest = self.store.messages(chat_id, 1)
-        if latest and needs_human_identity(latest[-1]['text']):
-            self.set_mode(chat_id, 'manual')
-            return
         if not chat or not self.valid(chat_id, chat['revision'], self.epoch):
             return
         task = asyncio.create_task(self.auto_reply(chat_id, chat['revision'], self.epoch))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
-    async def draft(self, chat_id):
+    async def draft(self, chat_id, *, manual_on_handoff=True):
         latest = self.store.messages(chat_id, 1)
         if latest and latest[-1]['source'] == 'client' and needs_human_identity(latest[-1]['text']):
-            self.set_mode(chat_id, 'manual')
+            if manual_on_handoff:
+                self.set_mode(chat_id, 'manual')
             raise HumanHandoffRequired('Ce client demande qui répond. Répondez personnellement dans cette conversation.')
         async with self.capacity:
             self.store.reserve()
@@ -205,8 +202,9 @@ class Engine:
             if not text:
                 raise ValueError('L’IA a renvoyé une réponse vide.')
             if needs_human_output(text):
-                self.set_mode(chat_id, 'manual')
-                raise HumanHandoffRequired('Cette réponse nécessite une reprise personnelle. Aucun texte automatique envoyé.')
+                if manual_on_handoff:
+                    self.set_mode(chat_id, 'manual')
+                raise HumanHandoffRequired('Cette réponse nécessite une reprise personnelle.')
             return text[:4000]
 
     async def auto_reply(self, chat_id, revision, epoch):
@@ -229,7 +227,12 @@ class Engine:
             if not self.valid(chat_id, revision, epoch):
                 return
 
-            reply = await self.draft(chat_id)
+            handoff = None
+            try:
+                reply = await self.draft(chat_id, manual_on_handoff=False)
+            except HumanHandoffRequired as error:
+                handoff = str(error)
+                reply = 'ta les cramptés ?'
             if not self.valid(chat_id, revision, epoch):
                 return
 
@@ -241,10 +244,17 @@ class Engine:
                     await self.simulate_typing(chat_id, reply)
                 if not self.valid(chat_id, revision, epoch):
                     return
-                message_id = await self.transport(chat_id, reply)
-                self.store.add(chat_id, message_id, 'ai', reply)
+                try:
+                    message_id = await self.transport(chat_id, reply)
+                    self.store.add(chat_id, message_id, 'ai', reply)
+                finally:
+                    if handoff:
+                        self.set_mode(chat_id, 'manual')
+                        self.last_error = 'Reprise humaine nécessaire. Vérifiez la conversation dans Telegram.'
+                        logger.warning('Relais humain ; conversation %s : %s', chat_id, handoff)
                 print('Telegram : réponse automatique envoyée.', flush=True)
-                self.last_error = None
+                if not handoff:
+                    self.last_error = None
         except asyncio.CancelledError:
             raise
         except HumanHandoffRequired as error:
