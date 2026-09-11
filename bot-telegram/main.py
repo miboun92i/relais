@@ -234,11 +234,18 @@ async def main():
                     return
                 name = ' '.join(filter(None, [getattr(peer, 'first_name', ''), getattr(peer, 'last_name', '')])) or getattr(peer, 'username', '') or str(event.chat_id)
                 store.ensure(event.chat_id, name)
-                text = event.raw_text or '[Média — à consulter dans Telegram]'
+                # Telegram envoie aussi ses salutations de démarrage en stickers,
+                # y compris animés. Les autres médias restent à vérifier à la main.
+                is_sticker = getattr(event.message, 'sticker', None) is not None
+                text = event.raw_text
+                if is_sticker and not (text or '').strip():
+                    text = '[Sticker Telegram reçu — peut être une salutation. Réponds naturellement et brièvement selon le contexte, sans supposer le contenu visuel.]'
+                elif not text:
+                    text = '[Média — à consulter dans Telegram]'
                 if event.out:
                     await engine.outgoing(event.chat_id, event.id, text, event.date.timestamp())
                 elif store.add(event.chat_id, event.id, 'client', text, event.date.timestamp()):
-                    if event.media:
+                    if event.media and not is_sticker:
                         engine.set_mode(event.chat_id, 'manual')
                     else:
                         engine.incoming(event.chat_id)
