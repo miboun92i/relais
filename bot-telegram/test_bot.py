@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from aiohttp.test_utils import TestClient, TestServer
 from core import Store, Engine
@@ -38,6 +39,63 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch))
         await asyncio.wait_for(self.started.wait(), 1)
         return task
+
+    async def test_read_typing_send_order_and_random_delay(self):
+        order = []
+        async def mark_read(chat_id):
+            order.append('read')
+        async def generate(prompt, messages):
+            order.append('generate')
+            return 'Bonjour !'
+        async def typing(chat_id, text):
+            order.append('typing')
+        async def send(chat_id, text):
+            order.append('send')
+            return 123
+        self.engine.mark_read = mark_read
+        self.engine.simulate_typing = typing
+        self.engine.generate = generate
+        self.engine.transport = send
+        self.engine.delay_min, self.engine.delay_max = 1.8, 3.8
+        async def sleep(seconds):
+            self.assertEqual(seconds, 2.7)
+            order.append('delay')
+        with patch('core.random.uniform', return_value=2.7) as uniform, patch('core.asyncio.sleep', side_effect=sleep):
+            await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
+        uniform.assert_called_once_with(1.8, 3.8)
+        self.assertEqual(order, ['delay', 'read', 'generate', 'typing', 'send'])
+
+    async def test_manual_takeover_during_typing_discards_reply(self):
+        self.release.set()
+        async def typing(chat_id, text):
+            self.engine.set_mode(chat_id, 'manual')
+        self.engine.simulate_typing = typing
+        await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
+        self.assertEqual(self.sent, [])
+
+    async def test_new_message_during_read_discards_old_generation(self):
+        async def mark_read(chat_id):
+            self.store.add(chat_id, 2, 'client', 'Autre question')
+        self.engine.mark_read = mark_read
+        await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
+        self.assertFalse(self.started.is_set())
+        self.assertEqual(self.sent, [])
+
+    async def test_shutdown_during_typing_cleans_up_without_send(self):
+        self.release.set()
+        entered, cleaned = asyncio.Event(), asyncio.Event()
+        async def typing(chat_id, text):
+            try:
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                cleaned.set()
+        self.engine.simulate_typing = typing
+        self.engine.incoming(1)
+        await asyncio.wait_for(entered.wait(), 1)
+        await self.engine.close()
+        self.assertTrue(cleaned.is_set())
+        self.assertEqual(self.sent, [])
 
     async def test_phone_takeover_discards_pending_ai(self):
         task = await self.start_reply()

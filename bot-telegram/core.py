@@ -1,6 +1,7 @@
 """État durable et coordination. Un seul processus par compte Telegram."""
 import asyncio
 import json
+import random
 import re
 import sqlite3
 import time
@@ -10,8 +11,14 @@ from datetime import datetime, timezone
 DEFAULTS = {'enabled': False, 'tone': 'Réponds en français, avec un ton chaleureux et naturel. Reste concise.', 'catalog': '', 'faq': '', 'daily_limit': 100}
 BASE_PROMPT = '''Tu es l'assistant Telegram du propriétaire de ce compte.
 Réponds aux clients en te basant uniquement sur les informations ci-dessous.
+Utilise les informations enregistrées dans le panel (TON, PRESTATIONS, FAQ).
+Présente les offres à la première personne, sans affirmer être une personne réelle.
+Ne mentionne jamais un propriétaire, une propriétaire ou un tiers qui répondrait.
 N'invente aucun tarif, disponibilité, prestation ou engagement. Si une information
-manque, indique que le propriétaire apportera une réponse personnelle.
+nécessaire manque dans le panel, renvoie exactement [RELAIS_HUMAIN] : aucun message
+ne sera envoyé automatiquement et la conversation passera en manuel.
+Si le prix demandé est connu, donne simplement ce prix sans réserve sur des détails
+qui ne sont pas demandés.
 Ne confirme jamais un paiement, une commande ou un rendez-vous. Tu n'as aucun
 accès aux transactions. Ne demande ni mot de passe, ni code, ni donnée bancaire.
 Rédige uniquement la réponse utile au nom du compte, sans signature ni présentation.
@@ -133,9 +140,15 @@ class Store:
         self.db.commit()
 
 class Engine:
-    def __init__(self, store, transport, generate, delay=2):
-        self.store, self.transport, self.generate = store, transport, generate
-        self.delay, self.epoch = delay, 0
+    def __init__(self, store, transport, generate, mark_read=None, simulate_typing=None, delay_min=1.8, delay_max=3.8, *, delay=None):
+        self.store = store
+        self.transport = transport
+        self.generate = generate
+        self.mark_read = mark_read
+        self.simulate_typing = simulate_typing
+        self.delay_min = delay_min if delay is None else delay
+        self.delay_max = delay_max if delay is None else delay
+        self.epoch = 0
         self.locks, self.tasks = {}, set()
         self.capacity = asyncio.Semaphore(2)
         self.last_error = None
@@ -190,15 +203,39 @@ class Engine:
 
     async def auto_reply(self, chat_id, revision, epoch):
         try:
-            await asyncio.sleep(self.delay)
+            # Petite fenêtre d'attente : si le client envoie plusieurs messages
+            # à la suite, seules les données de la révision la plus récente seront traitées.
+            wait = random.uniform(self.delay_min, self.delay_max)
+            print(f'Réponse automatique : attente initiale {wait:.1f} s.', flush=True)
+            await asyncio.sleep(wait)
             if not self.valid(chat_id, revision, epoch):
                 return
+
+            # Marquer la conversation comme lue sur Telegram avant de répondre.
+            if self.mark_read:
+                try:
+                    await self.mark_read(chat_id)
+                except Exception as error:
+                    print(f'Lecture Telegram : {type(error).__name__}')
+
+            if not self.valid(chat_id, revision, epoch):
+                return
+
             reply = await self.draft(chat_id)
+            if not self.valid(chat_id, revision, epoch):
+                return
+
             async with self.lock(chat_id):
+                if not self.valid(chat_id, revision, epoch):
+                    return
+                # Garder le même verrou pour la saisie et l'envoi.
+                if self.simulate_typing:
+                    await self.simulate_typing(chat_id, reply)
                 if not self.valid(chat_id, revision, epoch):
                     return
                 message_id = await self.transport(chat_id, reply)
                 self.store.add(chat_id, message_id, 'ai', reply)
+                print('Telegram : réponse automatique envoyée.', flush=True)
                 self.last_error = None
         except asyncio.CancelledError:
             raise

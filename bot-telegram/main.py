@@ -1,11 +1,12 @@
 """Relais : connexion Telegram et API privée du panel."""
 import asyncio
 import os
+import random
 from pathlib import Path
 from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 from dotenv import load_dotenv
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, functions, types
 from core import Engine, Store
 from auth import Auth, LoginFailed, TooManyAttempts
 
@@ -175,7 +176,37 @@ async def main():
     async def transport(chat_id, text):
         message = await client.send_message(chat_id, text, parse_mode=None, link_preview=False)
         return message.id
-    engine = Engine(store, transport, generate)
+    async def mark_read(chat_id):
+        messages = store.messages(chat_id, 1)
+        if not messages:
+            return
+        await client.send_read_acknowledge(chat_id, max_id=messages[-1]['telegram_id'])
+        print('Telegram : accusé de lecture accepté.', flush=True)
+
+    async def simulate_typing(chat_id, text):
+        duration = max(1.2, min((1.0 + len(text.strip()) / 35) * random.uniform(0.80, 1.25), 7.5))
+        peer = await client.get_input_entity(chat_id)
+        # Attendre la requête directement : les erreurs doivent remonter au moteur.
+        try:
+            remaining = duration
+            while remaining > 0:
+                await client(functions.messages.SetTypingRequest(peer, types.SendMessageTypingAction()))
+                print(f'Telegram : saisie acceptée ; délai restant {remaining:.1f} s.', flush=True)
+                step = min(remaining, 4.0)
+                await asyncio.sleep(step)
+                remaining -= step
+        finally:
+            await client(functions.messages.SetTypingRequest(peer, types.SendMessageCancelAction()))
+
+    engine = Engine(
+        store,
+        transport,
+        generate,
+        mark_read=mark_read,
+        simulate_typing=simulate_typing,
+    )
+    print(f'Code chargé : main={Path(__file__).resolve()} ; core={Path(__import__("core").__file__).resolve()}', flush=True)
+    print('Comportements actifs : lecture Telegram → génération → écrit… (1,2–7,5 s) → réponse ; attente initiale aléatoire 1,8–3,8 s.', flush=True)
     runner = None
     try:
         await client.start()
