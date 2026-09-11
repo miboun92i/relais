@@ -1,12 +1,20 @@
 """État durable et coordination. Un seul processus par compte Telegram."""
 import asyncio
 import json
+import logging
 import random
 import re
 import sqlite3
 import time
 import unicodedata
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+
+
+class HumanHandoffRequired(ValueError):
+    """La réponse exige une intervention humaine, sans être une panne IA."""
+
 
 DEFAULTS = {'enabled': False, 'tone': 'Réponds en français, avec un ton chaleureux et naturel. Reste concise.', 'catalog': '', 'faq': '', 'daily_limit': 100}
 BASE_PROMPT = '''Tu es l'assistant Telegram du propriétaire de ce compte.
@@ -183,7 +191,7 @@ class Engine:
         latest = self.store.messages(chat_id, 1)
         if latest and latest[-1]['source'] == 'client' and needs_human_identity(latest[-1]['text']):
             self.set_mode(chat_id, 'manual')
-            raise ValueError('Ce client demande qui répond. Répondez personnellement dans cette conversation.')
+            raise HumanHandoffRequired('Ce client demande qui répond. Répondez personnellement dans cette conversation.')
         async with self.capacity:
             self.store.reserve()
             settings = self.store.settings()
@@ -198,7 +206,7 @@ class Engine:
                 raise ValueError('L’IA a renvoyé une réponse vide.')
             if needs_human_output(text):
                 self.set_mode(chat_id, 'manual')
-                raise ValueError('Cette réponse nécessite une reprise personnelle. Aucun texte automatique envoyé.')
+                raise HumanHandoffRequired('Cette réponse nécessite une reprise personnelle. Aucun texte automatique envoyé.')
             return text[:4000]
 
     async def auto_reply(self, chat_id, revision, epoch):
@@ -216,7 +224,7 @@ class Engine:
                 try:
                     await self.mark_read(chat_id)
                 except Exception as error:
-                    print(f'Lecture Telegram : {type(error).__name__}')
+                    logger.exception('Lecture Telegram ; conversation %s : %s: %s', chat_id, type(error).__name__, error)
 
             if not self.valid(chat_id, revision, epoch):
                 return
@@ -239,11 +247,13 @@ class Engine:
                 self.last_error = None
         except asyncio.CancelledError:
             raise
+        except HumanHandoffRequired as error:
+            self.last_error = str(error)
+            logger.warning('Relais humain ; conversation %s : %s', chat_id, error)
         except Exception as error:
             if self.valid(chat_id, revision, epoch):
-                self.set_mode(chat_id, 'manual')
-                self.last_error = 'Une réponse IA a échoué. La conversation est passée en mode manuel.'
-            print(f'IA : {type(error).__name__}; conversation {chat_id} en pause.')
+                self.last_error = 'Une réponse automatique a échoué. Le mode automatique reste actif pour les prochains messages. Consultez les logs.'
+            logger.exception('Réponse automatique ; conversation %s : %s: %s', chat_id, type(error).__name__, error)
 
     async def outgoing(self, chat_id, message_id, text, created=None):
         # Attendre l'enregistrement d'un envoi IA pour reconnaître son écho.

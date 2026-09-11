@@ -1,5 +1,6 @@
 """Relais : connexion Telegram et API privée du panel."""
 import asyncio
+import logging
 import os
 import random
 from pathlib import Path
@@ -12,6 +13,7 @@ from auth import Auth, LoginFailed, TooManyAttempts
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv('DATA_DIR', str(ROOT))).resolve()
+logger = logging.getLogger(__name__)
 
 def make_app(engine, authenticator, origins, is_connected, provider):
     @web.middleware
@@ -33,11 +35,12 @@ def make_app(engine, authenticator, origins, is_connected, provider):
         try:
             response = await handler(request)
         except ValueError as error:
+            logger.exception('Panel : %s: %s', type(error).__name__, error)
             response = web.json_response({'error': str(error)}, status=400)
         except web.HTTPException as error:
             response = web.json_response({'error': error.reason}, status=error.status)
         except Exception as error:
-            print(f'Panel : {type(error).__name__}')
+            logger.exception('Panel : %s: %s', type(error).__name__, error)
             response = web.json_response({'error': 'La demande a échoué. Vérifiez Telegram et le fournisseur IA. Pour un envoi, vérifiez Telegram avant de réessayer.'}, status=503)
         response.headers.update(headers)
         return response
@@ -138,9 +141,7 @@ async def main():
     if not origins or '*' in origins:
         raise SystemExit('Renseigne PANEL_ORIGINS avec l’adresse exacte du panel, sans chemin.')
     store = Store(DATA_DIR / 'conversations.sqlite3')
-    settings = store.settings()
-    settings['enabled'] = False
-    store.save_settings(settings)
+    # Conserver le choix enregistré, y compris une pause volontaire.
     client = TelegramClient(str(DATA_DIR / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
     http = ClientSession(timeout=ClientTimeout(total=55))
     anthropic_client = None
@@ -242,7 +243,7 @@ async def main():
                     else:
                         engine.incoming(event.chat_id)
             except Exception as error:
-                print(f'Synchronisation : {type(error).__name__}')
+                logger.exception('Synchronisation : %s: %s', type(error).__name__, error)
                 value = store.settings()
                 value['enabled'] = False
                 engine.settings(value)
@@ -251,7 +252,8 @@ async def main():
         await runner.setup()
         host = os.getenv('HOST', '127.0.0.1')
         await web.TCPSite(runner, host, port).start()
-        print(f'Panel disponible sur {host}:{port}. IA en pause : réactivez-la dans le panel après vérification.')
+        state = 'active' if store.settings()['enabled'] else 'en pause'
+        print(f'Panel disponible sur {host}:{port}. IA {state} : état enregistré conservé.', flush=True)
         print('Connectez-vous au panel avec le compte créé par configurer_compte.py.')
         await client.run_until_disconnected()
     finally:
