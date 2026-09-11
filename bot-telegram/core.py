@@ -37,7 +37,7 @@ def plain_response(text):
     return text.replace('**', '').strip()
 
 
-DEFAULTS = {'enabled': False, 'tone': 'Réponds en français, avec un ton chaleureux et naturel. Reste concise.', 'catalog': '', 'faq': '', 'daily_limit': 100}
+DEFAULTS = {'enabled': False, 'tone': 'Réponds en français, avec un ton chaleureux et naturel. Reste concise.', 'catalog': '', 'faq': '', 'daily_limit': 100, 'glossary': []}
 BASE_PROMPT = '''Tu es l'assistant Telegram du propriétaire de ce compte.
 Réponds aux clients en te basant uniquement sur les informations ci-dessous.
 Utilise les informations enregistrées dans le panel (TON, PRESTATIONS, FAQ).
@@ -75,6 +75,15 @@ HANDOFF_FALLBACKS = [
     'Tu cherchais un renseignement en particulier ?',
     'Dis-m\'en un peu plus sur ce que tu cherches !',
 ]
+
+def apply_glossary(text, glossary):
+    for entry in glossary or []:
+        expression = (entry.get('expression') or '').strip()
+        if not expression:
+            continue
+        text = re.sub(re.escape(expression), entry.get('replacement') or '', text, flags=re.IGNORECASE)
+    return text
+
 
 def normalized(text):
     return ''.join(c for c in unicodedata.normalize('NFKD', text.lower())
@@ -118,7 +127,10 @@ class Store:
         self.db.commit()
 
     def settings(self):
-        return json.loads(self.db.execute('SELECT value FROM settings WHERE id=1').fetchone()[0])
+        value = json.loads(self.db.execute('SELECT value FROM settings WHERE id=1').fetchone()[0])
+        for key, default in DEFAULTS.items():
+            value.setdefault(key, default)
+        return value
 
     def save_settings(self, settings):
         self.db.execute('UPDATE settings SET value=? WHERE id=1', (json.dumps(settings),))
@@ -259,7 +271,9 @@ class Engine:
             self.store.reserve()
             settings = self.store.settings()
             prompt = BASE_PROMPT + '\nTON\n' + settings['tone'] + '\nPRESTATIONS\n' + settings['catalog'] + '\nFAQ\n' + settings['faq']
-            messages = [{'role': 'user' if m['source'] == 'client' else 'assistant', 'content': m['text'][:8000]} for m in self.store.messages(chat_id, 12)]
+            messages = [{'role': 'user' if m['source'] == 'client' else 'assistant',
+                         'content': (apply_glossary(m['text'], settings['glossary']) if m['source'] == 'client' else m['text'])[:8000]}
+                        for m in self.store.messages(chat_id, 12)]
             while messages and messages[0]['role'] != 'user':
                 messages.pop(0)
             if not messages:

@@ -102,7 +102,7 @@ def make_app(engine, authenticator, origins, is_connected, provider):
         return web.json_response({'text': await engine.draft(chat_id(request))})
     async def settings(request):
         value = await body(request)
-        if set(value) != {'tone', 'catalog', 'faq', 'enabled', 'daily_limit'}:
+        if set(value) != {'tone', 'catalog', 'faq', 'enabled', 'daily_limit', 'glossary'}:
             raise ValueError('Paramètres incomplets ou inconnus.')
         for key, maximum in [('tone', 6000), ('catalog', 12000), ('faq', 12000)]:
             if not isinstance(value[key], str) or len(value[key]) > maximum:
@@ -111,6 +111,16 @@ def make_app(engine, authenticator, origins, is_connected, provider):
             raise ValueError('Consignes ou activation invalides.')
         if type(value['daily_limit']) is not int or not 1 <= value['daily_limit'] <= 1000:
             raise ValueError('Le plafond doit être compris entre 1 et 1 000.')
+        glossary = value['glossary']
+        if not isinstance(glossary, list) or len(glossary) > 50:
+            raise ValueError('Le glossaire doit contenir au plus 50 entrées.')
+        for entry in glossary:
+            if not isinstance(entry, dict) or set(entry) != {'expression', 'replacement'}:
+                raise ValueError('Chaque entrée du glossaire doit contenir "expression" et "replacement".')
+            if not isinstance(entry['expression'], str) or not entry['expression'].strip() or len(entry['expression']) > 100:
+                raise ValueError('Expression invalide dans le glossaire.')
+            if not isinstance(entry['replacement'], str) or len(entry['replacement']) > 200:
+                raise ValueError('Remplacement invalide dans le glossaire.')
         engine.settings(value)
         return web.json_response({'ok': True})
     app.add_routes([web.post('/api/login', login), web.post('/api/logout', logout), web.get('/api/state', state), web.get('/api/chats/{chat}/messages', messages), web.post('/api/chats/{chat}/mode', mode), web.post('/api/chats/{chat}/read', read), web.post('/api/chats/{chat}/reply', reply), web.post('/api/chats/{chat}/draft', draft), web.post('/api/settings', settings)])
