@@ -264,9 +264,20 @@ class Engine:
                 messages.pop(0)
             if not messages:
                 raise ValueError('Aucun message client à traiter.')
-            text = (await asyncio.wait_for(self.generate(prompt, messages), timeout=60)).strip()
+            try:
+                text = (await asyncio.wait_for(self.generate(prompt, messages), timeout=60)).strip()
+            except (DailyLimitReached, asyncio.CancelledError):
+                raise
+            except Exception as error:
+                if temporary_ai_error(error):
+                    raise
+                if manual_on_handoff:
+                    self.set_mode(chat_id, 'manual')
+                raise HumanHandoffRequired("L’IA a refusé de traiter ce message (probablement un contenu sensible ou inapproprié). Vérifiez la conversation.") from error
             if not text:
-                raise ValueError('L’IA a renvoyé une réponse vide.')
+                if manual_on_handoff:
+                    self.set_mode(chat_id, 'manual')
+                raise HumanHandoffRequired("L’IA n’a pas pu générer de réponse (message potentiellement inapproprié ou sensible). Vérifiez la conversation.")
             if needs_human_output(text):
                 if manual_on_handoff:
                     self.set_mode(chat_id, 'manual')
