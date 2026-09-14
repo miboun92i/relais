@@ -6,13 +6,12 @@ public key, so a customer cannot mint or alter licenses.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
-import platform
-import uuid
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -32,11 +31,26 @@ def _b64d(value: str) -> bytes:
 
 
 def installation_id() -> str:
+    """Return a stable installation identifier, persisted in DATA_DIR if needed."""
     explicit = os.getenv("INSTALLATION_ID", "").strip()
     if explicit:
         return explicit
-    raw = f"{platform.node()}:{uuid.getnode()}".encode()
-    return hashlib.sha256(raw).hexdigest()[:32]
+    root = Path(__file__).resolve().parent
+    data_dir = Path(os.getenv("DATA_DIR", str(root))).resolve()
+    path = data_dir / ".installation-id"
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except FileNotFoundError:
+        pass
+    data_dir.mkdir(parents=True, exist_ok=True)
+    value = "inst_" + secrets.token_urlsafe(18)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+    return value
 
 
 @dataclass(frozen=True)
