@@ -6,6 +6,7 @@ import logging
 import os
 import random
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 from aiohttp import ClientSession, ClientTimeout, web
@@ -27,7 +28,19 @@ logger = logging.getLogger(__name__)
 async def main():
     os.umask(0o077)
     load_dotenv(ROOT / ".env")
-    claims = load_license_from_env(required=True)
+    test_mode = os.getenv("COMMERCIAL_TEST_MODE", "0") == "1"
+    required = os.getenv("LICENSE_REQUIRED", "1") != "0"
+    claims = load_license_from_env(required=required)
+    if claims is None:
+        if not test_mode:
+            raise SystemExit("Licence commerciale requise.")
+        claims = SimpleNamespace(
+            license_id="test-mode",
+            customer_id="railway-test",
+            plan="test",
+            max_accounts=1,
+            expires_at=None,
+        )
     authenticator = Auth.from_file(DATA_DIR / "panel-account.json")
 
     if not os.getenv("TELEGRAM_API_ID") or not os.getenv("TELEGRAM_API_HASH"):
@@ -187,8 +200,7 @@ async def main():
             f"{'connecté' if status.authorized else 'à connecter depuis le panel'} · licence {claims.plan}.",
             flush=True,
         )
-        while True:
-            await asyncio.sleep(3600)
+        await asyncio.Event().wait()
     finally:
         await engine.close()
         if runner:
