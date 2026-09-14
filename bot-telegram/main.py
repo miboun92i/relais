@@ -1,6 +1,7 @@
 """Relais : connexion Telegram et API privée du panel."""
 import asyncio
 import logging
+import inspect
 import os
 import random
 from pathlib import Path
@@ -8,11 +9,12 @@ from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, functions, types
+from runtime_config import data_directory
+from telegram_events import route_private_message
 from core import Engine, Store
 from auth import Auth, LoginFailed, TooManyAttempts
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv('DATA_DIR', str(ROOT))).resolve()
 logger = logging.getLogger(__name__)
 
 def make_app(engine, authenticator, origins, is_connected, provider):
@@ -28,8 +30,9 @@ def make_app(engine, authenticator, origins, is_connected, provider):
             return web.Response(status=204, headers=headers)
         authorization = request.headers.get('Authorization', '')
         token = authorization[7:] if authorization.startswith('Bearer ') else ''
-        login_request = request.path == '/api/login' and request.method == 'POST'
-        if not login_request and not authenticator.valid(token):
+        public_request = ((request.path == '/api/login' and request.method == 'POST')
+                          or (request.path == '/health' and request.method == 'GET'))
+        if not public_request and not authenticator.valid(token):
             return web.json_response({'error': 'Connectez-vous pour accéder à cet espace.'}, status=401, headers=headers)
         request['session_token'] = token
         try:
@@ -46,6 +49,13 @@ def make_app(engine, authenticator, origins, is_connected, provider):
         return response
 
     app = web.Application(middlewares=[guard], client_max_size=150000)
+    async def connected():
+        value = is_connected()
+        return bool(await value) if inspect.isawaitable(value) else bool(value)
+    async def health(request):
+        # The panel must work before the customer connects their Telegram account.
+        return web.json_response({'status': 'ok', 'component': 'panel'})
+    app.router.add_get('/health', health)
     def chat_id(request):
         ident = int(request.match_info['chat'])
         if not engine.store.chat(ident):
@@ -73,7 +83,7 @@ def make_app(engine, authenticator, origins, is_connected, provider):
         authenticator.logout(request['session_token'])
         return web.json_response({'ok': True})
     async def state(request):
-        return web.json_response({'chats': engine.store.chats(), 'settings': engine.store.settings(), 'connected': is_connected(), 'provider': provider, 'usage': engine.store.usage(), 'last_error': engine.last_error})
+        return web.json_response({'chats': engine.store.chats(), 'settings': engine.store.settings(), 'connected': await connected(), 'provider': provider, 'usage': engine.store.usage(), 'last_error': engine.last_error})
     async def messages(request):
         return web.json_response({'messages': engine.store.messages(chat_id(request))})
     async def mode(request):
@@ -94,7 +104,7 @@ def make_app(engine, authenticator, origins, is_connected, provider):
             raise ValueError('Le message doit contenir entre 1 et 4 000 caractères.')
         if not isinstance(request_id, str) or not 16 <= len(request_id) <= 80:
             raise ValueError('Identifiant de demande manquant.')
-        if not is_connected():
+        if not await connected():
             raise ValueError('Telegram est déconnecté.')
         ident_sent = await engine.reply(ident, text.strip(), request_id)
         return web.json_response({'ok': True, 'message_id': ident_sent})
@@ -128,8 +138,8 @@ def make_app(engine, authenticator, origins, is_connected, provider):
 
 async def main():
     os.umask(0o077)
-    load_dotenv(ROOT / '.env')
-    authenticator = Auth.from_file(DATA_DIR / 'panel-account.json')
+    data_dir = data_directory(ROOT)
+    authenticator = Auth.from_file(data_dir / 'panel-account.json')
     if not os.getenv('TELEGRAM_API_ID') or not os.getenv('TELEGRAM_API_HASH'):
         raise SystemExit('Remplis TELEGRAM_API_ID et TELEGRAM_API_HASH dans .env.')
     provider = os.getenv('AI_PROVIDER', 'ollama')
@@ -150,9 +160,9 @@ async def main():
     origins = {s.strip().rstrip('/') for s in os.getenv('PANEL_ORIGINS', '').split(',') if s.strip()}
     if not origins or '*' in origins:
         raise SystemExit('Renseigne PANEL_ORIGINS avec l’adresse exacte du panel, sans chemin.')
-    store = Store(DATA_DIR / 'conversations.sqlite3')
+    store = Store(data_dir / 'conversations.sqlite3')
     # Conserver le choix enregistré, y compris une pause volontaire.
-    client = TelegramClient(str(DATA_DIR / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
+    client = TelegramClient(str(data_dir / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
     http = ClientSession(timeout=ClientTimeout(total=55))
     anthropic_client = None
     openai_client = None
@@ -243,22 +253,7 @@ async def main():
                 if getattr(peer, 'bot', False):
                     return
                 name = ' '.join(filter(None, [getattr(peer, 'first_name', ''), getattr(peer, 'last_name', '')])) or getattr(peer, 'username', '') or str(event.chat_id)
-                store.ensure(event.chat_id, name)
-                # Telegram envoie aussi ses salutations de démarrage en stickers,
-                # y compris animés. Les autres médias restent à vérifier à la main.
-                is_sticker = getattr(event.message, 'sticker', None) is not None
-                text = event.raw_text
-                if is_sticker and not (text or '').strip():
-                    text = '[Sticker Telegram reçu — peut être une salutation. Réponds naturellement et brièvement selon le contexte, sans supposer le contenu visuel.]'
-                elif not text:
-                    text = '[Média — à consulter dans Telegram]'
-                if event.out:
-                    await engine.outgoing(event.chat_id, event.id, text, event.date.timestamp())
-                elif store.add(event.chat_id, event.id, 'client', text, event.date.timestamp()):
-                    if event.media and not is_sticker:
-                        engine.set_mode(event.chat_id, 'manual')
-                    else:
-                        engine.incoming(event.chat_id)
+                await route_private_message(engine, event, name)
             except Exception as error:
                 logger.exception('Synchronisation ; conversation %s : %s: %s', event.chat_id, type(error).__name__, error)
                 engine.report_error(event.chat_id, 'Erreur de synchronisation. IA globale inchangée ; consultez les logs.')

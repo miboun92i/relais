@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="fr">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="referrer" content="no-referrer"><meta name="description" content="Gérez vos conversations Telegram et gardez la main sur les réponses de votre assistant."><title>Relais · Conversations</title><link rel="stylesheet" href="style.css"><script src="app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"><meta name="referrer" content="no-referrer"><meta name="description" content="Gérez vos conversations Telegram et gardez la main sur les réponses de votre assistant."><title>Relais · Conversations</title><link rel="stylesheet" href="style.css"><script src="app.js" defer></script><script src="commercial.js" defer></script></head>
 <body>
 <section id="login-screen" class="login-screen" aria-labelledby="login-title">
   <div class="login-story"><a class="brand" href="./"><span class="brand-icon">r</span><span>relais<span class="brand-dot">.</span></span></a><div class="login-story-copy"><span class="eyebrow">VOTRE ESPACE PRIVÉ</span><h1>Vos conversations.<br>Votre contrôle.</h1><p>Retrouvez vos clients, réglez vos réponses et reprenez la main à tout moment.</p></div><span class="login-footnote">Un accès réservé à la gestion de votre compte.</span></div>
@@ -26,6 +26,19 @@
     <section id="glossary-view" class="settings-view" hidden><div class="settings-intro"><span class="eyebrow">AIDER L’IA À COMPRENDRE VOS CLIENTS</span><h2>Le glossaire de vos clients.</h2><p>Ajoutez les mots, l’argot ou les abréviations que vos clients utilisent, et ce qu’ils veulent dire. L’IA les remplacera avant de lire le message, sans rien changer à ce qui s’affiche dans vos conversations.</p></div><form id="glossary-form"><div class="form-card"><h3>Expressions et remplacements</h3><div id="glossary-rows" class="glossary-rows"></div><button type="button" id="glossary-add" class="text-button">+ Ajouter une ligne</button></div><div class="settings-save"><span id="glossary-save-status" role="status"></span><button class="button primary" type="submit">Enregistrer le glossaire</button></div></form></section>
   </main>
 </div>
+
+<dialog id="telegram-dialog" class="telegram-dialog">
+  <form method="dialog" class="telegram-card">
+    <div class="telegram-head"><div><span class="eyebrow">COMPTE TELEGRAM</span><h2>Connecter votre compte</h2></div><button class="button subtle" value="cancel" aria-label="Fermer">✕</button></div>
+    <p id="telegram-summary" class="field-help">Vérification de votre compte…</p>
+    <div id="telegram-connected" hidden><p><strong id="telegram-name">Compte connecté</strong><br><span id="telegram-username"></span></p><button id="telegram-disconnect" type="button" class="button">Déconnecter ce compte</button></div>
+    <div id="telegram-phone-step"><label for="telegram-phone">Numéro de téléphone</label><input id="telegram-phone" type="tel" autocomplete="tel" placeholder="+33612345678" maxlength="20"><p class="field-help">Utilisez le format international. Telegram vous enverra un code de connexion.</p><button id="telegram-send-code" type="button" class="button primary wide">Recevoir le code</button></div>
+    <div id="telegram-code-step" hidden><label for="telegram-code">Code Telegram</label><input id="telegram-code" inputmode="numeric" autocomplete="one-time-code" placeholder="12345" maxlength="8"><button id="telegram-submit-code" type="button" class="button primary wide">Valider le code</button></div>
+    <div id="telegram-password-step" hidden><label for="telegram-2fa">Mot de passe Telegram 2FA</label><input id="telegram-2fa" type="password" autocomplete="current-password" maxlength="256"><button id="telegram-submit-password" type="button" class="button primary wide">Valider le mot de passe</button></div>
+    <p id="telegram-error" role="alert"></p>
+    <div class="license-box"><span class="eyebrow">LICENCE</span><strong id="license-plan">—</strong><small id="license-details">Chargement…</small></div>
+  </form>
+</dialog>
 
 <div id="toast" role="status" hidden></div>
 </body></html>
