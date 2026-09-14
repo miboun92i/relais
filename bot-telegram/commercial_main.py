@@ -187,7 +187,8 @@ async def main():
             f"{'connecté' if status.authorized else 'à connecter depuis le panel'} · licence {claims.plan}.",
             flush=True,
         )
-        await client.run_until_disconnected()
+        while True:
+            await asyncio.sleep(3600)
     finally:
         await engine.close()
         if runner:
