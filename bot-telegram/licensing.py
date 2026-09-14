@@ -1,15 +1,12 @@
-"""Commercial license primitives for Relais.
+"""Signed commercial licenses for Relais.
 
-Licenses are signed with HMAC-SHA256. The signing secret belongs to the vendor and
-must never be shipped to customers. Customer deployments only need the signed
-license token and validate it with LICENSE_VERIFY_SECRET in the hosted SaaS setup.
-For a fully distributed/offline edition, replace HMAC with an asymmetric signature.
+The vendor keeps the Ed25519 private key offline. Deployments receive only the
+public key, so a customer cannot mint or alter licenses.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
 import os
 import platform
@@ -17,6 +14,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 
 class LicenseError(ValueError):
@@ -32,7 +32,6 @@ def _b64d(value: str) -> bytes:
 
 
 def installation_id() -> str:
-    """Stable non-secret identifier used to bind a license to one installation."""
     explicit = os.getenv("INSTALLATION_ID", "").strip()
     if explicit:
         return explicit
@@ -56,16 +55,10 @@ class LicenseClaims:
         if missing:
             raise LicenseError(f"Licence incomplète: {', '.join(sorted(missing))}")
         max_accounts = data["max_accounts"]
-        if type(max_accounts) is not int or max_accounts < 1 or max_accounts > 100:
+        if type(max_accounts) is not int or not 1 <= max_accounts <= 100:
             raise LicenseError("Nombre de comptes autorisés invalide.")
-        return cls(
-            license_id=str(data["license_id"]),
-            customer_id=str(data["customer_id"]),
-            plan=str(data["plan"]),
-            max_accounts=max_accounts,
-            expires_at=data.get("expires_at"),
-            installation_id=data.get("installation_id"),
-        )
+        return cls(str(data["license_id"]), str(data["customer_id"]), str(data["plan"]), max_accounts,
+                   data.get("expires_at"), data.get("installation_id"))
 
     def assert_valid(self, current_installation_id: str | None = None) -> None:
         if self.expires_at:
@@ -77,33 +70,29 @@ class LicenseClaims:
                 expiry = expiry.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) >= expiry.astimezone(timezone.utc):
                 raise LicenseError("Licence expirée.")
-        if self.installation_id and current_installation_id:
-            if not hmac.compare_digest(self.installation_id, current_installation_id):
-                raise LicenseError("Cette licence appartient à une autre installation.")
+        if self.installation_id and current_installation_id and self.installation_id != current_installation_id:
+            raise LicenseError("Cette licence appartient à une autre installation.")
 
 
-def sign_license(payload: dict[str, Any], secret: str) -> str:
-    """Vendor-side helper. Do not expose the signing secret to customers."""
-    if len(secret) < 32:
-        raise LicenseError("Le secret de signature doit contenir au moins 32 caractères.")
+def sign_license(payload: dict[str, Any], private_key_b64: str) -> str:
+    try:
+        key = Ed25519PrivateKey.from_private_bytes(_b64d(private_key_b64))
+    except Exception as exc:
+        raise LicenseError("Clé privée de licence invalide.") from exc
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     body64 = _b64e(body)
-    signature = hmac.new(secret.encode(), body64.encode(), hashlib.sha256).digest()
-    return f"{body64}.{_b64e(signature)}"
+    return f"{body64}.{_b64e(key.sign(body64.encode()))}"
 
 
-def verify_license(token: str, secret: str, bind_installation: bool = True) -> LicenseClaims:
+def verify_license(token: str, public_key_b64: str, bind_installation: bool = True) -> LicenseClaims:
     try:
-        body64, supplied_sig = token.split(".", 1)
-    except ValueError as exc:
-        raise LicenseError("Format de licence invalide.") from exc
-    expected = hmac.new(secret.encode(), body64.encode(), hashlib.sha256).digest()
-    try:
-        supplied = _b64d(supplied_sig)
+        body64, signature64 = token.split(".", 1)
+        public_key = Ed25519PublicKey.from_public_bytes(_b64d(public_key_b64))
+        public_key.verify(_b64d(signature64), body64.encode())
+    except (ValueError, InvalidSignature) as exc:
+        raise LicenseError("Signature ou format de licence invalide.") from exc
     except Exception as exc:
-        raise LicenseError("Signature de licence invalide.") from exc
-    if not hmac.compare_digest(expected, supplied):
-        raise LicenseError("Signature de licence invalide.")
+        raise LicenseError("Clé publique de licence invalide.") from exc
     try:
         data = json.loads(_b64d(body64))
     except Exception as exc:
@@ -115,9 +104,9 @@ def verify_license(token: str, secret: str, bind_installation: bool = True) -> L
 
 def load_license_from_env(required: bool = False) -> LicenseClaims | None:
     token = os.getenv("LICENSE_TOKEN", "").strip()
-    secret = os.getenv("LICENSE_VERIFY_SECRET", "").strip()
+    public_key = os.getenv("LICENSE_PUBLIC_KEY", "").strip()
     if not token and not required:
         return None
-    if not token or not secret:
-        raise LicenseError("LICENSE_TOKEN et LICENSE_VERIFY_SECRET sont requis.")
-    return verify_license(token, secret, bind_installation=os.getenv("LICENSE_BIND_INSTALLATION", "1") != "0")
+    if not token or not public_key:
+        raise LicenseError("LICENSE_TOKEN et LICENSE_PUBLIC_KEY sont requis.")
+    return verify_license(token, public_key, os.getenv("LICENSE_BIND_INSTALLATION", "1") != "0")
