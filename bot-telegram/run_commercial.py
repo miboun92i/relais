@@ -1,7 +1,4 @@
-"""Licensed production entrypoint.
-
-Use this instead of `python main.py` for commercial deployments.
-"""
+"""Licensed production entrypoint for commercial deployments."""
 import asyncio
 import os
 from pathlib import Path
@@ -10,8 +7,7 @@ from dotenv import load_dotenv
 
 from bootstrap import ensure_panel_account
 from licensing import LicenseError, load_license_from_env
-import main as relay
-
+import commercial_main as relay
 
 ROOT = Path(__file__).resolve().parent
 
