@@ -15,19 +15,20 @@ from telethon import TelegramClient, events, functions, types
 
 from auth import Auth
 from commercial_panel import add_commercial_routes
+from runtime_config import data_directory
+from telegram_events import route_private_message
 from core import Engine, Store
 from licensing import load_license_from_env
 from main import make_app
 from telegram_onboarding import TelegramOnboarding
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = Path(os.getenv("DATA_DIR", str(ROOT))).resolve()
 logger = logging.getLogger(__name__)
 
 
 async def main():
     os.umask(0o077)
-    load_dotenv(ROOT / ".env")
+    data_dir = data_directory(ROOT)
     test_mode = os.getenv("COMMERCIAL_TEST_MODE", "0") == "1"
     required = os.getenv("LICENSE_REQUIRED", "1") != "0"
     claims = load_license_from_env(required=required)
@@ -41,7 +42,7 @@ async def main():
             max_accounts=1,
             expires_at=None,
         )
-    authenticator = Auth.from_file(DATA_DIR / "panel-account.json")
+    authenticator = Auth.from_file(data_dir / "panel-account.json")
 
     if not os.getenv("TELEGRAM_API_ID") or not os.getenv("TELEGRAM_API_HASH"):
         raise SystemExit("TELEGRAM_API_ID et TELEGRAM_API_HASH sont requis.")
@@ -60,8 +61,8 @@ async def main():
     if provider not in ("ollama", "anthropic", "openai"):
         raise SystemExit("AI_PROVIDER doit être ollama, anthropic ou openai.")
 
-    store = Store(DATA_DIR / "conversations.sqlite3")
-    client = TelegramClient(str(DATA_DIR / "compte"), api_id, os.environ["TELEGRAM_API_HASH"])
+    store = Store(data_dir / "conversations.sqlite3")
+    client = TelegramClient(str(data_dir / "compte"), api_id, os.environ["TELEGRAM_API_HASH"])
     onboarding = TelegramOnboarding(client)
     http = ClientSession(timeout=ClientTimeout(total=55))
     anthropic_client = None
@@ -167,20 +168,7 @@ async def main():
             if getattr(peer, "bot", False):
                 return
             name = " ".join(filter(None, [getattr(peer, "first_name", ""), getattr(peer, "last_name", "")])) or getattr(peer, "username", "") or str(event.chat_id)
-            store.ensure(event.chat_id, name)
-            is_sticker = getattr(event.message, "sticker", None) is not None
-            text = event.raw_text
-            if is_sticker and not (text or "").strip():
-                text = "[Sticker Telegram reçu — peut être une salutation. Réponds naturellement et brièvement selon le contexte.]"
-            elif not text:
-                text = "[Média — à consulter dans Telegram]"
-            if event.out:
-                await engine.outgoing(event.chat_id, event.id, text, event.date.timestamp())
-            elif store.add(event.chat_id, event.id, "client", text, event.date.timestamp()):
-                if event.media and not is_sticker:
-                    engine.set_mode(event.chat_id, "manual")
-                else:
-                    engine.incoming(event.chat_id)
+            await route_private_message(engine, event, name)
         except Exception as error:
             logger.exception("Synchronisation commerciale ; conversation %s : %s", event.chat_id, error)
             engine.report_error(event.chat_id, "Erreur de synchronisation. Consultez les logs.")
@@ -188,7 +176,9 @@ async def main():
     runner = None
     try:
         await onboarding.ensure_connected()
-        app = make_app(engine, authenticator, origins, client.is_connected, provider)
+        async def connection_ready():
+            return client.is_connected() and await client.is_user_authorized()
+        app = make_app(engine, authenticator, origins, connection_ready, provider)
         add_commercial_routes(app, onboarding, claims)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
@@ -200,6 +190,7 @@ async def main():
             f"{'connecté' if status.authorized else 'à connecter depuis le panel'} · licence {claims.plan}.",
             flush=True,
         )
+        print(f"IA {'active' if store.settings()['enabled'] else 'en pause'} : état enregistré conservé ; données persistantes configurées.", flush=True)
         await asyncio.Event().wait()
     finally:
         await engine.close()

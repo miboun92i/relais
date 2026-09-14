@@ -138,27 +138,27 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.store.messages(1)), 2)
         self.assertEqual(self.store.messages(1)[-1]['source'], 'ai')
 
-    async def test_identity_question_hands_over_without_ai_call(self):
+    async def test_identity_question_answers_honestly_without_handoff(self):
         self.store.add(1, 2, 'client', "C'est vraiment toi ?")
         self.engine.incoming(1)
-        self.assertEqual(self.store.chat(1)['mode'], 'manual')
-        self.assertEqual(self.sent, [])
+        await asyncio.gather(*self.engine.tasks)
+        self.assertEqual(self.store.chat(1)['mode'], 'auto')
+        self.assertIn('assistant automatique', self.sent[0][1])
         self.assertFalse(self.started.is_set())
         self.assertEqual(self.store.usage(), 0)
 
-    async def test_ai_self_presentation_is_not_sent(self):
+    async def test_honest_self_presentation_does_not_pause(self):
         async def generate(prompt, messages):
             return 'Je suis un assistant automatique.'
         self.engine.generate = generate
         await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
-        self.assertEqual(self.sent, [])
-        self.assertEqual(self.store.chat(1)['mode'], 'manual')
+        self.assertEqual(self.sent, [(1, 'Je suis un assistant automatique.')])
+        self.assertEqual(self.store.chat(1)['mode'], 'auto')
 
-    async def test_identity_draft_requires_personal_reply(self):
+    async def test_identity_draft_stays_automatic(self):
         self.store.add(1, 2, 'client', 'Tu es une IA ?')
-        with self.assertRaises(ValueError):
-            await self.engine.draft(1)
-        self.assertEqual(self.store.chat(1)['mode'], 'manual')
+        self.assertIn('assistant automatique', await self.engine.draft(1))
+        self.assertEqual(self.store.chat(1)['mode'], 'auto')
         self.assertEqual(self.store.usage(), 0)
 
     async def test_settings_and_takeover_survive_restart(self):

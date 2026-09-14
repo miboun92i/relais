@@ -1,7 +1,18 @@
 import json
+import pytest
 
 from bootstrap import ensure_panel_account
 from auth import password_digest
+
+
+def test_missing_test_credentials_fail_without_logging_password(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('COMMERCIAL_TEST_MODE', '1')
+    monkeypatch.delenv('PANEL_BOOTSTRAP_USERNAME', raising=False)
+    monkeypatch.delenv('PANEL_BOOTSTRAP_PASSWORD', raising=False)
+    with pytest.raises(SystemExit):
+        ensure_panel_account(tmp_path)
+    assert not (tmp_path / 'panel-account.json').exists()
+    assert capsys.readouterr().out == ''
 
 
 def _matches(path, username, password):

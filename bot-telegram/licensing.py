@@ -12,6 +12,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from runtime_config import data_directory
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -36,7 +37,7 @@ def installation_id() -> str:
     if explicit:
         return explicit
     root = Path(__file__).resolve().parent
-    data_dir = Path(os.getenv("DATA_DIR", str(root))).resolve()
+    data_dir = data_directory(root)
     path = data_dir / ".installation-id"
     try:
         value = path.read_text(encoding="utf-8").strip()

@@ -4,7 +4,6 @@ from __future__ import annotations
 import hmac
 import json
 import os
-import secrets
 from pathlib import Path
 
 from auth import create_account, password_digest
@@ -61,14 +60,10 @@ def ensure_panel_account(data_dir: Path) -> bool:
         return True
 
     if not username or not password:
-        if not test_mode:
-            raise SystemExit(
-                "Premier démarrage : définis PANEL_BOOTSTRAP_USERNAME et "
-                "PANEL_BOOTSTRAP_PASSWORD (15 caractères minimum)."
-            )
-        username = "testadmin"
-        password = secrets.token_urlsafe(24)
-        print(f"TEST PANEL LOGIN: username={username} password={password}", flush=True)
+        raise SystemExit(
+            "Premier démarrage : définis PANEL_BOOTSTRAP_USERNAME et "
+            "PANEL_BOOTSTRAP_PASSWORD (15 caractères minimum). Aucun mot de passe n'est écrit dans les logs."
+        )
 
     try:
         account = create_account(username, password)

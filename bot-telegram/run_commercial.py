@@ -6,6 +6,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from bootstrap import ensure_panel_account
+from runtime_config import data_directory
 from licensing import LicenseError, load_license_from_env
 import commercial_main as relay
 
@@ -13,8 +14,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def prepare_deployment():
-    load_dotenv(ROOT / ".env")
-    data_dir = Path(os.getenv("DATA_DIR", str(ROOT))).resolve()
+    data_dir = data_directory(ROOT)
     created = ensure_panel_account(data_dir)
     if created:
         print("Compte panel initialisé automatiquement.", flush=True)
@@ -39,3 +39,4 @@ if __name__ == "__main__":
         raise SystemExit(f"Licence refusée : {exc}") from exc
     except KeyboardInterrupt:
         print("\nRelais arrêté.")
+

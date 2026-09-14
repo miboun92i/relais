@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from dataclasses import dataclass
 
 from telethon.errors import (
@@ -52,6 +53,7 @@ class TelegramOnboarding:
         self.pending_phone = None
         self.phone_code_hash = None
         self.needs_password = False
+        self.expires_at = 0
 
     async def ensure_connected(self):
         if not self.client.is_connected():
@@ -94,6 +96,7 @@ class TelegramOnboarding:
             await self.ensure_connected()
             if await self.client.is_user_authorized():
                 raise TelegramOnboardingError("Un compte Telegram est déjà connecté.")
+            self._clear_pending()
             try:
                 sent = await self.client.send_code_request(phone)
             except PhoneNumberInvalidError as exc:
@@ -103,6 +106,7 @@ class TelegramOnboarding:
             self.pending_phone = phone
             self.phone_code_hash = sent.phone_code_hash
             self.needs_password = False
+            self.expires_at = time.monotonic() + 600
             return {"ok": True, "phone": phone, "next": "code"}
 
     async def submit_code(self, code: str):
@@ -112,8 +116,10 @@ class TelegramOnboarding:
         if not re.fullmatch(r"[0-9]{4,8}", code):
             raise TelegramOnboardingError("Code Telegram invalide.")
         async with self.lock:
+            self._check_expiry()
             if not self.pending_phone or not self.phone_code_hash:
                 raise TelegramOnboardingError("Demandez d'abord un nouveau code Telegram.")
+            await self.ensure_connected()
             try:
                 await self.client.sign_in(
                     phone=self.pending_phone,
@@ -126,8 +132,7 @@ class TelegramOnboarding:
             except PhoneCodeInvalidError as exc:
                 raise TelegramOnboardingError("Le code Telegram est incorrect.") from exc
             except PhoneCodeExpiredError as exc:
-                self.pending_phone = None
-                self.phone_code_hash = None
+                self._clear_pending()
                 raise TelegramOnboardingError("Le code Telegram a expiré. Demandez-en un nouveau.") from exc
             except FloodWaitError as exc:
                 raise TelegramOnboardingError(f"Telegram demande d'attendre {exc.seconds} secondes avant de réessayer.") from exc
@@ -138,8 +143,10 @@ class TelegramOnboarding:
         if not isinstance(password, str) or not 1 <= len(password) <= 256:
             raise TelegramOnboardingError("Mot de passe 2FA invalide.")
         async with self.lock:
+            self._check_expiry()
             if not self.needs_password:
                 raise TelegramOnboardingError("Aucun mot de passe 2FA n'est attendu.")
+            await self.ensure_connected()
             try:
                 await self.client.sign_in(password=password)
             except PasswordHashInvalidError as exc:
@@ -162,3 +169,9 @@ class TelegramOnboarding:
         self.pending_phone = None
         self.phone_code_hash = None
         self.needs_password = False
+        self.expires_at = 0
+
+    def _check_expiry(self):
+        if self.expires_at and time.monotonic() >= self.expires_at:
+            self._clear_pending()
+            raise TelegramOnboardingError("Connexion expirée. Demandez un nouveau code Telegram.")
