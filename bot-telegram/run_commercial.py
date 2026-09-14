@@ -8,6 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from bootstrap import ensure_panel_account
 from licensing import LicenseError, load_license_from_env
 import main as relay
 
@@ -15,8 +16,12 @@ import main as relay
 ROOT = Path(__file__).resolve().parent
 
 
-def validate_license():
+def prepare_deployment():
     load_dotenv(ROOT / ".env")
+    data_dir = Path(os.getenv("DATA_DIR", str(ROOT))).resolve()
+    created = ensure_panel_account(data_dir)
+    if created:
+        print("Compte panel initialisé automatiquement.", flush=True)
     required = os.getenv("LICENSE_REQUIRED", "1") != "0"
     claims = load_license_from_env(required=required)
     if claims:
@@ -27,11 +32,12 @@ def validate_license():
         )
     elif required:
         raise LicenseError("Licence commerciale requise.")
+    return claims
 
 
 if __name__ == "__main__":
     try:
-        validate_license()
+        prepare_deployment()
         asyncio.run(relay.main())
     except LicenseError as exc:
         raise SystemExit(f"Licence refusée : {exc}") from exc
