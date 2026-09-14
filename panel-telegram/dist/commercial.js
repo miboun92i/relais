@@ -43,8 +43,12 @@ async function openTelegramDialog(){
   try{await refreshCommercialAccount();}catch(error){$('telegram-error').textContent=error.message||'Impossible de charger le compte Telegram.';}
 }
 
-$('connect-open').addEventListener('click',event=>{event.preventDefault();openTelegramDialog();});
-$('connect-banner').addEventListener('click',event=>{event.preventDefault();if(state.demo){showLogin();return;}openTelegramDialog();});
+$('connect-open').addEventListener('click',event=>{
+  event.preventDefault();event.stopImmediatePropagation();openTelegramDialog();
+},{capture:true});
+$('connect-banner').addEventListener('click',event=>{
+  event.preventDefault();event.stopImmediatePropagation();if(state.demo){showLogin();return;}openTelegramDialog();
+},{capture:true});
 
 $('telegram-send-code').addEventListener('click',()=>busy($('telegram-send-code'),async()=>{
   $('telegram-error').textContent='';
