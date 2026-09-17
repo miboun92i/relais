@@ -1,5 +1,8 @@
 # Relais — assistant et panel Telegram
 
+Pour déployer la V1 commerciale hébergée, suivre [INSTALLATION-V1.md](INSTALLATION-V1.md).
+Les sections historiques ci-dessous décrivent aussi le mode local initial.
+
 Aperçu local : http://127.0.0.1:8765
 
 Adresse prévue après publication privée : https://relais-telegram-miboun.chummy-shell-0459.chatgpt.site
@@ -29,7 +32,7 @@ Pour changer les identifiants ou réinitialiser un mot de passe oublié, relance
 - Fournisseur Ollama par défaut, ou Anthropic si souhaité.
 - Historique, attribution IA/humain, pauses et compteur quotidien conservés dans SQLite.
 
-L'étiquette « Assistant IA » n'est ajoutée que dans le panel. Le texte envoyé sur Telegram n'a aucun préfixe ni présentation automatique. Lorsqu'une question sur l'identité de l'interlocuteur est reconnue, la conversation passe en mode manuel sans réponse automatique : la propriétaire répond elle-même. Les consignes et un filtre de sortie évitent les présentations comme assistant. Ces contrôles ne garantissent pas de reconnaître toutes les formulations possibles d'un modèle ou d'un client.
+L'étiquette « Assistant IA » n'est ajoutée que dans le panel. Le texte envoyé sur Telegram n'a aucun préfixe ni présentation automatique. Une question directe sur l’identité reçoit une réponse honnête indiquant que l’assistant automatique répond, sans passage en manuel. Ces contrôles ne garantissent pas de reconnaître toutes les formulations possibles d'un modèle ou d'un client.
 
 ## Ce qu'il reste à connecter
 
@@ -91,16 +94,16 @@ Sur Mac, `Lancer.command` propose aussi la création du compte lors du premier d
 - Écrire dans la conversation sur Telegram ou envoyer un message depuis le panel met ce client en mode manuel.
 - Le mode manuel reste actif jusqu'au clic « Réactiver l'IA », y compris après un redémarrage.
 - Une réponse encore en préparation est ignorée si une reprise manuelle, une pause, un nouveau message ou un changement de consignes l'a rendue obsolète. Un envoi déjà transmis à Telegram ne peut pas être annulé rétroactivement.
-- Au démarrage du programme, les réponses automatiques sont globalement mises en pause. Vérifier les échanges intervenus pendant l'interruption, puis les réactiver dans le panel. Réactiver globalement ne change pas les conversations déjà en mode manuel.
+- Au redémarrage, l’activation globale et les pauses manuelles enregistrées sont conservées. Le premier démarrage reste en pause, jusqu’à l’activation volontaire. Les messages reçus pendant un arrêt complet ne sont pas automatiquement rejoués par cette correction.
 - Dans les « Messages enregistrés » de la propriétaire : `/ia pause`, `/ia reprendre`, `/ia statut` contrôlent l'état global.
 
 ## Limites de cette version
 
 - Elle synchronise les nouveaux messages pendant son fonctionnement, pas tout l'historique antérieur. Le panel affiche les 200 derniers messages enregistrés par conversation. Les suppressions, modifications et statuts de lecture Telegram ne sont pas répliqués ; « Non lu » désigne la lecture dans le panel.
-- Les médias ne sont pas téléchargés : ils doivent être consultés sur Telegram et font passer le client en mode manuel.
+- Les photos, vidéos, vocaux et fichiers doivent être consultés sur Telegram et font passer le client en manuel. Les stickers de salutation et les aperçus de liens restent en automatique.
 - Groupes, bots, messages de service et identifiants de `IGNORE_CHAT_IDS` sont ignorés.
 - Le regroupement attend deux secondes avant de préparer une réponse. Deux générations IA au maximum s'exécutent en parallèle.
-- Une erreur IA bascule la conversation en mode manuel. Le compteur de tentatives est durable et se réinitialise chaque jour à minuit UTC. Les propositions et les erreurs comptent dans le plafond ; ce n'est pas un plafond financier.
+- Une panne technique IA conserve le mode automatique ; les erreurs temporaires et réponses vides sont réessayées deux fois. Après épuisement, l’erreur est signalée et un prochain message peut être traité. Seul un relais humain explicite met la conversation en manuel. Le compteur de tentatives est durable et se réinitialise chaque jour à minuit UTC. Les propositions et les erreurs comptent dans le plafond ; ce n'est pas un plafond financier.
 - Les paiements, commandes et disponibilités ne sont pas vérifiés automatiquement. Les consignes demandent à l'IA de ne pas les confirmer, mais une réponse générée doit rester surveillée.
 - La base contient les conversations en clair sur le serveur. Les identifiants et sessions du panel permettent de les lire et d'envoyer des messages ; la session Telegram donne accès au compte. Protéger les accès au serveur et les sauvegardes. Aucun de ces fichiers ne doit être partagé avec les sources.
 
@@ -117,3 +120,24 @@ Les connexions réelles Telegram/Ollama/Anthropic et l'installation du service s
 Documentation de référence : https://docs.telethon.dev/en/stable/basic/updates.html et https://docs.ollama.com/api/chat . Les anciennes consignes de `personnalite.txt` sont remplacées par celles du panel.
 
 Références pour le stockage des mots de passe : https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html et https://docs.python.org/3/library/hashlib.html#hashlib.scrypt .
+
+
+
+## Fiabilité de la version commerciale
+
+Le bootstrap, les deux runtimes et l’identifiant d’installation résolvent le même
+dossier après chargement de `.env` : `DATA_DIR`, puis le volume Railway, puis le
+dossier local hors Railway. Une installation Railway sans chemin persistant
+configuré refuse de démarrer. Les identifiants panel déjà enregistrés sont
+conservés ; en mode test seulement, des identifiants explicitement configurés
+peuvent les resynchroniser. Aucun identifiant de secours n’est imprimé dans les logs.
+
+Le panel distingue une connexion réseau Telegram d’un compte réellement autorisé.
+Le parcours téléphone/code/2FA expire au bout de dix minutes et peut rétablir la
+connexion réseau entre les étapes. `/health` vérifie la disponibilité du panel ;
+il ne certifie ni la connexion du compte ni une réponse réelle du fournisseur IA.
+
+La suite `python -m pytest -q` couvre aussi le parcours HTTP panel → connexion
+Telegram simulée → DM → réponse → redémarrage. Une installation correspond à un
+compte Telegram et un administrateur de panel : ce n’est pas un serveur multi-clients.
+Chaque installation cliente doit disposer de son propre stockage et de sa session.

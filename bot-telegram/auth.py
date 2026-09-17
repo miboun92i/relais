@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import time
@@ -54,8 +55,6 @@ class Auth:
             raise SystemExit('Créez votre identifiant et mot de passe avec : python configurer_compte.py')
 
     async def login(self, username, password):
-        # Limite globale adaptée à ce panel à compte unique, y compris derrière un proxy.
-        # Aucun en-tête IP fourni par le client n'est utilisé comme preuve d'identité.
         async with self.lock:
             now = self.clock()
             while self.failures and self.failures[0] <= now - 60:
@@ -65,12 +64,16 @@ class Auth:
             valid_shape = (isinstance(username, str) and len(username) <= 64
                            and isinstance(password, str) and 1 <= len(password) <= 128)
             matches = False
+            username_ok = False
+            password_ok = False
             if valid_shape:
                 digest = await asyncio.to_thread(password_digest, password, bytes.fromhex(self.account['salt']))
                 password_ok = hmac.compare_digest(digest, self.account['digest'])
                 username_ok = hmac.compare_digest(username.strip().encode(), self.account['username'].encode())
                 matches = password_ok and username_ok
             if not matches:
+                if os.getenv('COMMERCIAL_TEST_MODE', '0') == '1':
+                    print(f'TEST LOGIN DIAG: shape={valid_shape} username_ok={username_ok} password_ok={password_ok}', flush=True)
                 self.failures.append(self.clock())
                 raise LoginFailed()
             self.failures.clear()

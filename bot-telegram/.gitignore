@@ -6,3 +6,10 @@ panel-key.txt
 panel-account.json
 panel-account.tmp
 *.sqlite3*
+
+# Identités privées de l’installation
+.installation-id
+.customer-id
+.telegram-user-id
+.runtime.lock
+.pytest_cache/
