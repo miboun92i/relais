@@ -151,3 +151,43 @@ def test_expiry_checked_during_runtime(tmp_path, monkeypatch):
     with __import__('pytest').raises(LicenseError): verify_license(token,PUBLIC_B64,False)
     for invalid in ([], {'license_id':[]}, payload(expires_at=5)):
         with __import__('pytest').raises(LicenseError): verify_license(sign_license(invalid,PRIVATE_B64),PUBLIC_B64,False)
+
+class AccountIsolationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wrong_telegram_identity_is_disconnected(self):
+        from telegram_onboarding import TelegramOnboarding, TelegramOnboardingError
+        client=SimpleNamespace(is_connected=lambda:True,is_user_authorized=AsyncMock(return_value=True),
+                              get_me=AsyncMock(return_value=SimpleNamespace(id=456)),log_out=AsyncMock())
+        def bound_account(uid):
+            if uid != 123: raise ValueError('Compte différent')
+        flow=TelegramOnboarding(client,account_validator=bound_account)
+        with self.assertRaises(TelegramOnboardingError): await flow.status()
+        client.log_out.assert_awaited_once()
+
+    async def test_panel_token_does_not_cross_customer_boundary(self):
+        from core import Store,Engine
+        from main import make_app
+        a=Auth(create_account('customer-a','Customer A password 2026'))
+        b=Auth(create_account('customer-b','Customer B password 2026'))
+        token=a.issue()
+        with tempfile.TemporaryDirectory() as tmp:
+            sa,sb=Store(Path(tmp)/'a.sqlite3'),Store(Path(tmp)/'b.sqlite3')
+            sa.ensure(123,'Conversation privée A')
+            engine=Engine(sb,AsyncMock(),AsyncMock())
+            async with TestClient(TestServer(make_app(engine,b,{'https://panel.example'},lambda:False,'mock'))) as http:
+                response=await http.get('/api/state',headers={'Authorization':'Bearer '+token})
+                self.assertEqual(response.status,401)
+                self.assertEqual(sb.chats(),[])
+            await engine.close();sa.db.close();sb.db.close()
+
+
+def test_lease_and_license_expiry_rechecked_without_restart(tmp_path,monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setenv('DATA_DIR',str(tmp_path))
+    claims=verify_license(sign_license(payload(),PRIVATE_B64),PUBLIC_B64,False)
+    gate=LicenseGate(claims,'signed-token',PUBLIC_B64,'https://authority.example',tmp_path)
+    gate.until=time.monotonic()+60
+    gate.require()
+    gate.claims=replace(claims,expires_at=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat())
+    with __import__('pytest').raises(LicenseError):gate.require()
+    gate.claims=claims;gate.until=time.monotonic()-1
+    with __import__('pytest').raises(LicenseError):gate.require()
