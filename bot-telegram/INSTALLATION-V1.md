@@ -54,6 +54,15 @@ Ne jamais placer de clés, mots de passe ou sessions Telegram dans Git.
    configuration Railway : le compte haché est conservé dans le volume. Pour une
    réinitialisation, utiliser `configurer_compte.py` dans l'installation concernée.
 
+## Renouvellement
+
+Le bouton « Renouveler 30 jours » prolonge la licence et affiche un nouveau jeton.
+Remplacer `LICENSE_TOKEN` dans chaque service de cette licence puis redéployer.
+L'identité de licence et ses installations restent identiques : les sessions et
+conversations sont conservées. L'ancien jeton est refusé après renouvellement ;
+prévoir cette opération avec le redéploiement pour limiter l'interruption. Une
+licence révoquée ne peut pas être renouvelée.
+
 ## Contrôles et comportements
 
 - Signature Ed25519, expiration vérifiée avant les générations et envois.

@@ -62,6 +62,18 @@ class AuthorityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, 200)
         self.assertEqual((await self.lease(issued['license'], f'inst_customer_{winner}')).status, 403)
 
+    async def test_renewal_preserves_slot_and_invalidates_old_token(self):
+        issued = await self.issue()
+        self.assertEqual((await self.lease(issued['license'], 'inst_renewal_test')).status, 200)
+        response = await self.http.post('/admin/licenses/'+issued['claims']['license_id']+'/renew',
+                                        headers=self.headers, json={'days':30})
+        self.assertEqual(response.status, 200)
+        renewed = await response.json()
+        self.assertEqual(renewed['claims']['license_id'], issued['claims']['license_id'])
+        self.assertGreater(renewed['claims']['expires_at'], issued['claims']['expires_at'])
+        self.assertEqual((await self.lease(renewed['license'], 'inst_renewal_test')).status, 200)
+        self.assertEqual((await self.lease(issued['license'], 'inst_renewal_test')).status, 403)
+
     async def test_disable_releases_slot_without_reactivation(self):
         issued = await self.issue()
         self.assertEqual((await self.lease(issued['license'], 'inst_first_account')).status, 200)

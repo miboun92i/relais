@@ -78,6 +78,22 @@ def make_license_app(data_dir, private_key, public_key, auth):
         with db:
             db.execute('INSERT INTO licenses(id,customer,token,created) VALUES(?,?,?,?)', (claims['license_id'], claims['customer_id'], token, now.isoformat()))
         return web.json_response({'license': token, 'claims': claims}, status=201)
+    async def renew(request):
+        data = await request.json()
+        days = data.get('days', 30)
+        if type(days) is not int or not 1 <= days <= 3660:
+            raise ValueError()
+        row = db.execute('SELECT token,revoked FROM licenses WHERE id=?', (request.match_info['id'],)).fetchone()
+        if not row or row['revoked']:
+            raise ValueError()
+        from licensing import _b64d
+        claims = json.loads(_b64d(row['token'].split('.')[0]))
+        previous = datetime.fromisoformat(claims['expires_at'].replace('Z', '+00:00'))
+        claims['expires_at'] = (max(previous, datetime.now(timezone.utc)) + timedelta(days=days)).isoformat()
+        token = sign_license(claims, private_key)
+        with db:
+            db.execute('UPDATE licenses SET token=? WHERE id=?', (token, claims['license_id']))
+        return web.json_response({'license': token, 'claims': claims})
     async def revoke(request):
         with db:
             result = db.execute('UPDATE licenses SET revoked=1 WHERE id=?', (request.match_info['id'],))
@@ -133,7 +149,7 @@ def make_license_app(data_dir, private_key, public_key, auth):
     app.on_cleanup.append(close)
     app.add_routes([web.get('/health', health), web.get('/', index), web.get('/license_admin.js', script), web.get('/license_admin.css', styles),
                     web.post('/login', login), web.get('/admin/licenses', listing), web.post('/admin/licenses', issue),
-                    web.post('/admin/licenses/{id}/revoke', revoke),
+                    web.post('/admin/licenses/{id}/revoke', revoke), web.post('/admin/licenses/{id}/renew', renew),
                     web.post('/admin/installations/{id}/disable', disable_installation), web.post('/lease', lease)])
     return app
 
