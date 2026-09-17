@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def prepare_deployment():
+    os.umask(0o077)
     data_dir = data_directory(ROOT)
     created = ensure_panel_account(data_dir)
     if created:

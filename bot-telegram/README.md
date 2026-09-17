@@ -1,5 +1,8 @@
 # Relais — assistant et panel Telegram
 
+Pour déployer la V1 commerciale hébergée, suivre [INSTALLATION-V1.md](INSTALLATION-V1.md).
+Les sections historiques ci-dessous décrivent aussi le mode local initial.
+
 Aperçu local : http://127.0.0.1:8765
 
 Adresse prévue après publication privée : https://relais-telegram-miboun.chummy-shell-0459.chatgpt.site
