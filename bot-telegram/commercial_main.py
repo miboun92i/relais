@@ -5,6 +5,9 @@ import asyncio
 import logging
 import os
 import random
+import signal
+from contextlib import suppress
+from commercial_security import LicenseGate, lock_volume
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlparse
@@ -42,6 +45,18 @@ async def main():
             max_accounts=1,
             expires_at=None,
         )
+    volume_lock = lock_volume(data_dir)
+    gate = None
+    if not test_mode:
+        gate = LicenseGate(claims, os.environ['LICENSE_TOKEN'], os.environ['LICENSE_PUBLIC_KEY'],
+                           os.getenv('LICENSE_SERVER_URL', ''), data_dir)
+        try:
+            await gate.refresh()
+        except ValueError:
+            pass  # Keep the authenticated panel available; automation stays blocked.
+    def require_license():
+        if gate:
+            gate.require()
     authenticator = Auth.from_file(data_dir / "panel-account.json")
 
     if not os.getenv("TELEGRAM_API_ID") or not os.getenv("TELEGRAM_API_HASH"):
@@ -63,7 +78,14 @@ async def main():
 
     store = Store(data_dir / "conversations.sqlite3")
     client = TelegramClient(str(data_dir / "compte"), api_id, os.environ["TELEGRAM_API_HASH"])
-    onboarding = TelegramOnboarding(client)
+    def bind_account(user_id):
+        path = data_dir / '.telegram-user-id'
+        if path.exists() and path.read_text().strip() != str(user_id):
+            raise ValueError('Ce volume appartient à un autre compte Telegram. Utilisez une nouvelle installation.')
+        if not path.exists():
+            path.write_text(str(user_id))
+            path.chmod(0o600)
+    onboarding = TelegramOnboarding(client, account_validator=bind_account)
     http = ClientSession(timeout=ClientTimeout(total=55))
     anthropic_client = None
     openai_client = None
@@ -80,6 +102,7 @@ async def main():
         openai_client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=50, max_retries=0)
 
     async def generate(prompt, messages):
+        require_license()
         if provider == "anthropic":
             result = await anthropic_client.messages.create(
                 model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5"),
@@ -113,12 +136,15 @@ async def main():
             return (await response.json())["message"]["content"]
 
     async def require_authorized():
+        require_license()
         await onboarding.ensure_connected()
         if not await client.is_user_authorized():
             raise ValueError("Aucun compte Telegram n'est connecté.")
 
     async def transport(chat_id, text):
         await require_authorized()
+        bind_account((await client.get_me()).id)
+        require_license()
         message = await client.send_message(chat_id, text, parse_mode=None, link_preview=False)
         return message.id
 
@@ -149,7 +175,9 @@ async def main():
         try:
             if not await client.is_user_authorized():
                 return
+            require_license()
             me = await client.get_me()
+            bind_account(me.id)
             if not event.is_private or event.chat_id in ignored or event.chat_id == 777000:
                 return
             if event.chat_id == me.id:
@@ -174,12 +202,13 @@ async def main():
             engine.report_error(event.chat_id, "Erreur de synchronisation. Consultez les logs.")
 
     runner = None
+    monitor = asyncio.create_task(gate.monitor()) if gate else None
     try:
         await onboarding.ensure_connected()
         async def connection_ready():
             return client.is_connected() and await client.is_user_authorized()
         app = make_app(engine, authenticator, origins, connection_ready, provider)
-        add_commercial_routes(app, onboarding, claims)
+        add_commercial_routes(app, onboarding, claims, gate)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         host = os.getenv("HOST", "0.0.0.0")
@@ -191,8 +220,16 @@ async def main():
             flush=True,
         )
         print(f"IA {'active' if store.settings()['enabled'] else 'en pause'} : état enregistré conservé ; données persistantes configurées.", flush=True)
-        await asyncio.Event().wait()
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+        await stop.wait()
     finally:
+        if monitor:
+            monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitor
         await engine.close()
         if runner:
             await runner.cleanup()
@@ -203,3 +240,4 @@ async def main():
         if openai_client:
             await openai_client.close()
         store.db.close()
+        volume_lock.close()

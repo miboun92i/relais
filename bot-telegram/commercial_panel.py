@@ -6,7 +6,17 @@ from aiohttp import web
 from telegram_onboarding import TelegramOnboardingError
 
 
-def add_commercial_routes(app, onboarding, license_claims):
+def add_commercial_routes(app, onboarding, license_claims, gate=None):
+    def require_license():
+        if gate:
+            gate.require()
+    @web.middleware
+    async def commercial_guard(request, handler):
+        if request.method == 'POST' and request.path not in ('/api/login', '/api/logout', '/api/telegram/logout'):
+            require_license()
+        return await handler(request)
+    app.middlewares.append(commercial_guard)
+
     async def body(request):
         value = await request.json()
         if not isinstance(value, dict):
@@ -14,7 +24,14 @@ def add_commercial_routes(app, onboarding, license_claims):
         return value
 
     async def license_status(request):
+        error = None
+        try:
+            require_license()
+        except ValueError as exc:
+            error = str(exc)
         return web.json_response({
+            "valid": error is None, "error": error,
+            "installation_id": gate.installation if gate else None,
             "license_id": license_claims.license_id,
             "customer_id": license_claims.customer_id,
             "plan": license_claims.plan,
@@ -26,6 +43,7 @@ def add_commercial_routes(app, onboarding, license_claims):
         return web.json_response((await onboarding.status()).as_dict())
 
     async def telegram_send_code(request):
+        require_license()
         data = await body(request)
         try:
             result = await onboarding.send_code(data.get("phone"))
@@ -34,6 +52,7 @@ def add_commercial_routes(app, onboarding, license_claims):
         return web.json_response(result)
 
     async def telegram_submit_code(request):
+        require_license()
         data = await body(request)
         try:
             result = await onboarding.submit_code(data.get("code"))
@@ -42,6 +61,7 @@ def add_commercial_routes(app, onboarding, license_claims):
         return web.json_response(result)
 
     async def telegram_submit_password(request):
+        require_license()
         data = await body(request)
         try:
             result = await onboarding.submit_password(data.get("password"))

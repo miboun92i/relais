@@ -1,0 +1,10 @@
+.env*
+*.session*
+*.sqlite*
+*.db*
+panel-account*
+__pycache__
+.pytest_cache
+.venv
+.*-id
+.runtime.lock

@@ -47,8 +47,9 @@ class TelegramStatus:
 
 
 class TelegramOnboarding:
-    def __init__(self, client):
+    def __init__(self, client, account_validator=None):
         self.client = client
+        self.account_validator = account_validator
         self.lock = asyncio.Lock()
         self.pending_phone = None
         self.phone_code_hash = None
@@ -61,6 +62,8 @@ class TelegramOnboarding:
 
     async def status(self) -> TelegramStatus:
         await self.ensure_connected()
+        if self.expires_at and time.monotonic() >= self.expires_at:
+            self._clear_pending()
         authorized = await self.client.is_user_authorized()
         if not authorized:
             return TelegramStatus(
@@ -70,6 +73,13 @@ class TelegramOnboarding:
                 needs_password=self.needs_password,
             )
         me = await self.client.get_me()
+        if self.account_validator:
+            try:
+                self.account_validator(me.id)
+            except ValueError as exc:
+                await self._logout()
+                self._clear_pending()
+                raise TelegramOnboardingError(str(exc)) from exc
         name = " ".join(filter(None, [getattr(me, "first_name", ""), getattr(me, "last_name", "")])) or None
         return TelegramStatus(
             connected=self.client.is_connected(),
@@ -161,9 +171,16 @@ class TelegramOnboarding:
         async with self.lock:
             await self.ensure_connected()
             if await self.client.is_user_authorized():
-                await self.client.log_out()
+                await self._logout()
             self._clear_pending()
             return {"ok": True}
+
+    async def _logout(self):
+        filename = getattr(getattr(self.client, 'session', None), 'filename', None)
+        await self.client.log_out()
+        if filename:
+            from telethon.sessions import SQLiteSession
+            self.client.session = SQLiteSession(filename)
 
     def _clear_pending(self):
         self.pending_phone = None

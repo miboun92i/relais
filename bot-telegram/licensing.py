@@ -65,6 +65,14 @@ class LicenseClaims:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "LicenseClaims":
+        if not isinstance(data, dict):
+            raise LicenseError("Contenu de licence invalide.")
+        for name in ('license_id', 'customer_id', 'plan'):
+            if not isinstance(data.get(name), str) or not 1 <= len(data[name]) <= 100:
+                raise LicenseError("Identité de licence invalide.")
+        for name in ('expires_at', 'installation_id'):
+            if data.get(name) is not None and (not isinstance(data[name], str) or not 1 <= len(data[name]) <= 100):
+                raise LicenseError("Champ de licence invalide.")
         required = {"license_id", "customer_id", "plan", "max_accounts"}
         missing = required - set(data)
         if missing:

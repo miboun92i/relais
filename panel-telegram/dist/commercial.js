@@ -31,7 +31,7 @@ async function refreshCommercialAccount(){
   setTelegramStep(status);
   $('license-plan').textContent=(license.plan||'licence').toUpperCase();
   const expiry=license.expires_at?new Date(license.expires_at).toLocaleDateString('fr-FR'):'sans expiration';
-  $('license-details').textContent=`${license.max_accounts} compte(s) autorisé(s) · ${expiry}`;
+  $('license-details').textContent=license.valid===false?license.error:`${license.max_accounts} compte(s) autorisé(s) · ${expiry}`;
   state.connected=!!status.authorized;
   render();
 }
@@ -63,6 +63,7 @@ $('telegram-submit-code').addEventListener('click',()=>busy($('telegram-submit-c
   $('telegram-error').textContent='';
   try{
     const result=await commercialRequest('/api/telegram/code','POST',{code:$('telegram-code').value.trim()});
+    $('telegram-code').value='';
     if(result.next==='password')$('telegram-2fa').focus();
     await refreshCommercialAccount();
   }catch(error){$('telegram-error').textContent=error.message;}
@@ -75,7 +76,7 @@ $('telegram-submit-password').addEventListener('click',()=>busy($('telegram-subm
     $('telegram-2fa').value='';
     await refreshCommercialAccount();
     toast('Compte Telegram connecté.');
-  }catch(error){$('telegram-error').textContent=error.message;}
+  }catch(error){$('telegram-error').textContent=error.message;}finally{$('telegram-2fa').value='';}
 }));
 
 $('telegram-disconnect').addEventListener('click',()=>busy($('telegram-disconnect'),async()=>{
