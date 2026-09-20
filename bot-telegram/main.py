@@ -102,26 +102,52 @@ def make_app(engine, authenticator, origins, is_connected, provider):
         return web.json_response({'text': await engine.draft(chat_id(request))})
     async def settings(request):
         value = await body(request)
-        if set(value) != {'tone', 'catalog', 'faq', 'enabled', 'daily_limit', 'glossary'}:
-            raise ValueError('Paramètres incomplets ou inconnus.')
-        for key, maximum in [('tone', 6000), ('catalog', 12000), ('faq', 12000)]:
-            if not isinstance(value[key], str) or len(value[key]) > maximum:
-                raise ValueError(f'Champ {key} invalide.')
-        if not value['tone'].strip() or type(value['enabled']) is not bool:
-            raise ValueError('Consignes ou activation invalides.')
-        if type(value['daily_limit']) is not int or not 1 <= value['daily_limit'] <= 1000:
-            raise ValueError('Le plafond doit être compris entre 1 et 1 000.')
-        glossary = value['glossary']
+        # More permissive: accept missing optional fields
+        tone = value.get('tone', '')
+        catalog = value.get('catalog', '')
+        faq = value.get('faq', '')
+        enabled = value.get('enabled', False)
+        daily_limit = value.get('daily_limit', 100)
+        glossary = value.get('glossary', [])
+
+        if not isinstance(tone, str) or len(tone) > 6000:
+            raise ValueError('Champ tone invalide.')
+        if not isinstance(catalog, str) or len(catalog) > 12000:
+            raise ValueError('Champ catalog invalide.')
+        if not isinstance(faq, str) or len(faq) > 12000:
+            raise ValueError('Champ faq invalide.')
+        if not tone.strip():
+            raise ValueError('Les consignes (ton) ne peuvent pas être vides.')
+        if type(enabled) is not bool:
+            raise ValueError('Activation invalide.')
+        if type(daily_limit) is not int or not 1 <= daily_limit <= 1000:
+            # Try to coerce from string/float
+            try:
+                daily_limit = int(daily_limit)
+                if not 1 <= daily_limit <= 1000:
+                    raise ValueError()
+            except (TypeError, ValueError):
+                raise ValueError('Le plafond doit être compris entre 1 et 1 000.')
         if not isinstance(glossary, list) or len(glossary) > 50:
-            raise ValueError('Le glossaire doit contenir au plus 50 entrées.')
+            glossary = []
+        clean_glossary = []
         for entry in glossary:
-            if not isinstance(entry, dict) or set(entry) != {'expression', 'replacement'}:
-                raise ValueError('Chaque entrée du glossaire doit contenir "expression" et "replacement".')
-            if not isinstance(entry['expression'], str) or not entry['expression'].strip() or len(entry['expression']) > 100:
-                raise ValueError('Expression invalide dans le glossaire.')
-            if not isinstance(entry['replacement'], str) or len(entry['replacement']) > 200:
-                raise ValueError('Remplacement invalide dans le glossaire.')
-        engine.settings(value)
+            if not isinstance(entry, dict):
+                continue
+            expr = entry.get('expression', '')
+            repl = entry.get('replacement', '')
+            if isinstance(expr, str) and expr.strip() and len(expr) <= 100 and isinstance(repl, str) and len(repl) <= 200:
+                clean_glossary.append({'expression': expr.strip(), 'replacement': repl})
+
+        cleaned = {
+            'tone': tone.strip(),
+            'catalog': catalog,
+            'faq': faq,
+            'enabled': enabled,
+            'daily_limit': daily_limit,
+            'glossary': clean_glossary,
+        }
+        engine.settings(cleaned)
         return web.json_response({'ok': True})
     app.add_routes([web.post('/api/login', login), web.post('/api/logout', logout), web.get('/api/state', state), web.get('/api/chats/{chat}/messages', messages), web.post('/api/chats/{chat}/mode', mode), web.post('/api/chats/{chat}/read', read), web.post('/api/chats/{chat}/reply', reply), web.post('/api/chats/{chat}/draft', draft), web.post('/api/settings', settings)])
     return app
