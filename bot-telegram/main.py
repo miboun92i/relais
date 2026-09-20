@@ -265,7 +265,8 @@ async def main():
         app = make_app(engine, authenticator, origins, client.is_connected, provider)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
-        host = os.getenv('HOST', '127.0.0.1')
+        # 0.0.0.0 is required for Railway / cloud hosting
+        host = os.getenv('HOST', '0.0.0.0')
         await web.TCPSite(runner, host, port).start()
         state = 'active' if store.settings()['enabled'] else 'en pause'
         print(f'Panel disponible sur {host}:{port}. IA {state} : état enregistré conservé.', flush=True)
