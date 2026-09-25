@@ -162,11 +162,30 @@ async def main():
         account_path.write_text(account_env, encoding='utf-8')
         print('Bootstrap : panel-account.json écrit depuis l\'environnement.', flush=True)
     session_path = DATA_DIR / 'compte.session'
-    session_env = os.getenv('TELEGRAM_SESSION_GZ_B64')
-    if session_env and not session_path.exists():
+    if not session_path.exists():
         import base64, gzip
-        session_path.write_bytes(gzip.decompress(base64.b64decode(session_env)))
-        print('Bootstrap : compte.session écrit depuis l\'environnement.', flush=True)
+        candidates = []
+        single = os.getenv('TELEGRAM_SESSION_GZ_B64') or ''
+        if single:
+            candidates.append(('TELEGRAM_SESSION_GZ_B64', single))
+        n = int(os.getenv('TELEGRAM_SESSION_GZ_B64_N') or '0')
+        if n > 0:
+            joined = ''.join(os.getenv(f'TELEGRAM_SESSION_GZ_B64_{i}', '') for i in range(n))
+            candidates.append((f'{n} chunks', joined))
+        written = False
+        for label, session_env in candidates:
+            if not session_env:
+                continue
+            try:
+                raw = gzip.decompress(base64.b64decode(session_env, validate=True))
+                session_path.write_bytes(raw)
+                print(f'Bootstrap : compte.session écrit via {label} ({len(raw)} octets).', flush=True)
+                written = True
+                break
+            except Exception as err:
+                print(f'Bootstrap : session {label} invalide ({type(err).__name__}: {err}).', flush=True)
+        if not written:
+            print('Bootstrap : aucune session Telegram valide dans l\'environnement.', flush=True)
     authenticator = Auth.from_file(account_path)
     if not os.getenv('TELEGRAM_API_ID') or not os.getenv('TELEGRAM_API_HASH'):
         raise SystemExit('Remplis TELEGRAM_API_ID et TELEGRAM_API_HASH dans .env.')
