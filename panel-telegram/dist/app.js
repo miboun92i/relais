@@ -11,7 +11,7 @@ const demoChats = [
 let state = {demo:false,chats:[],settings:{...initialSettings},connected:false,usage:0};
 let sessionTimer = null;
 const pendingSends = new Map();
-let selected = 1, filter='all', view='inbox', credentials=null, threadMessages=[], lastMessages='', refreshing=false, toastTimer, connectionEpoch=0, glossaryRows=[];
+let selected = 1, filter='all', view='inbox', credentials=null, threadMessages=[], lastMessages='', refreshing=false, toastTimer, connectionEpoch=0, glossaryRows=[], teasers=[], demoTeasers=[{id:'demo1',label:'Tease douche',filename:'demo1.mp4',active:true,primary:true,created:Date.now()/1000-86400,size:2_400_000},{id:'demo2',label:'Tease miroir',filename:'demo2.mp4',active:true,primary:false,created:Date.now()/1000-3600,size:1_800_000}];
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,5000);}
 function time(t){return new Date(t*1000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});}
 async function request(path,method='GET',body,auth=credentials){
@@ -31,11 +31,11 @@ function clearPrivateState(){
   $('search').value='';$('save-status').textContent='';filter='all';loadSettings();render();
 }
 function showLogin(message=''){
-  clearPrivateState();$('panel-shell').hidden=true;$('login-screen').hidden=false;$('connect-error').textContent=message;document.title='Relais · Connexion';
+  clearPrivateState();$('panel-shell').hidden=true;$('login-screen').hidden=false;$('connect-error').textContent=message;document.title='NTGM.FR · Connexion';
 }
 function openDemo(){
   clearPrivateState();state={demo:true,chats:structuredClone(demoChats),settings:{...initialSettings},connected:false,usage:0};selected=1;threadMessages=state.chats[0].messages;
-  $('login-screen').hidden=true;$('panel-shell').hidden=false;document.title='Relais · Démonstration';setView('inbox');render();
+  $('login-screen').hidden=true;$('panel-shell').hidden=false;document.title='NTGM.FR · Démonstration';setView('inbox');render();
 }
 async function logout(){
   if(state.demo){showLogin();return;}
@@ -50,11 +50,87 @@ function render(){renderList();renderThread();$('demo-banner').hidden=!state.dem
 function loadSettings(){for(const key of ['tone','catalog','faq'])$(key).value=state.settings[key];$('enabled').checked=state.settings.enabled;$('daily-limit').value=state.settings.daily_limit;}
 function renderGlossary(){$('glossary-rows').innerHTML=glossaryRows.map((entry,i)=>`<div class="glossary-row" data-index="${i}"><input type="text" class="glossary-expression" placeholder="Ce que le client écrit (ex : dispo)" maxlength="100" value="${esc(entry.expression)}"><span class="glossary-arrow" aria-hidden="true">→</span><input type="text" class="glossary-replacement" placeholder="Ce que ça veut dire (ex : disponibilité)" maxlength="200" value="${esc(entry.replacement)}"><button type="button" class="glossary-remove" aria-label="Supprimer cette ligne">✕</button></div>`).join('')||'<p class="field-help">Aucune expression enregistrée pour l’instant.</p>';}
 function loadGlossary(){glossaryRows=(state.settings.glossary||[]).map(e=>({expression:e.expression||'',replacement:e.replacement||''}));if(!glossaryRows.length)glossaryRows=[{expression:'',replacement:''}];renderGlossary();}
-function setView(next){view=next;$('inbox-view').hidden=next!=='inbox';$('settings-view').hidden=next!=='settings';$('glossary-view').hidden=next!=='glossary';$('page-title').textContent=next==='inbox'?'Conversations':next==='settings'?'Mon assistant':'Glossaire';document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===next));if(next==='settings')loadSettings();if(next==='glossary')loadGlossary();}
+function setView(next){view=next;$('inbox-view').hidden=next!=='inbox';$('settings-view').hidden=next!=='settings';$('glossary-view').hidden=next!=='glossary';$('teasers-view').hidden=next!=='teasers';$('page-title').textContent=next==='inbox'?'Conversations':next==='settings'?'Mon assistant':next==='glossary'?'Glossaire':'Avant-goûts';document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b.dataset.view===next));if(next==='settings')loadSettings();if(next==='glossary')loadGlossary();if(next==='teasers')loadTeasers();}
 async function selectChat(id){selected=id;lastMessages='';$('reply').value='';if(state.demo){const c=state.chats.find(c=>c.id===id);threadMessages=c.messages;c.unread=0;}else{const data=await request(`/api/chats/${id}/messages`);if(selected!==id)return;threadMessages=data.messages;await request(`/api/chats/${id}/read`,'POST',{});const c=state.chats.find(c=>c.id===id);if(c)c.unread=0;}render();}
 async function refresh(){if(state.demo||!credentials||refreshing)return;refreshing=true;const epoch=connectionEpoch;try{const fresh=await request('/api/state');if(epoch!==connectionEpoch)return;state={...fresh,demo:false};if(!state.chats.some(c=>c.id===selected)){selected=state.chats[0]?.id??null;lastMessages='';}if(selected){const id=selected;const data=await request(`/api/chats/${id}/messages`);if(epoch!==connectionEpoch)return;if(id===selected)threadMessages=data.messages;}else threadMessages=[];render();}catch(error){if(epoch!==connectionEpoch)return;state.connected=false;render();$('connection-status').textContent='Serveur injoignable';}finally{refreshing=false;}}
 async function setMode(mode){const id=selected;const c=state.chats.find(c=>c.id===id);if(!c)throw Error('Sélectionnez une conversation.');if(!state.demo)await request(`/api/chats/${id}/mode`,'POST',{mode});const current=state.chats.find(item=>item.id===id);if(current)current.mode=mode;render();toast(mode==='manual'?'Vous avez la main. L’IA est en pause pour ce client.':'L’IA répondra aux prochains messages.');return {id,mode};}
 async function saveSettings(settings){if(!state.demo)await request('/api/settings','POST',settings);state.settings=settings;render();}
+function formatSize(n){if(!Number.isFinite(n))return '—';if(n<1024)return n+' o';if(n<1048576)return (n/1024).toFixed(0)+' Ko';return (n/1048576).toFixed(1)+' Mo';}
+function renderTeasers(){
+  const list=[...(state.demo?demoTeasers:teasers)].sort((a,b)=>{
+    const pa=a.primary||a.featured?0:1, pb=b.primary||b.featured?0:1;
+    if(pa!==pb)return pa-pb;
+    return (Number(a.created)||0)-(Number(b.created)||0);
+  });
+  $('teaser-empty').hidden=list.length>0;
+  $('teaser-list').innerHTML=list.map(t=>`<article class="teaser-item ${t.active?'':'inactive'}${t.primary?' is-primary':''}" data-id="${esc(t.id)}">
+    <div class="teaser-meta">
+      <strong>${esc(t.label||t.filename||'Vidéo')}${t.primary?' <em class="teaser-primary-badge">Principale</em>':''}</strong>
+      <span>${formatSize(t.size)} · ${t.active?'Active':'Inactive'}${t.primary?' · Envoyée en priorité':''}</span>
+    </div>
+    <div class="teaser-actions">
+      <button type="button" class="text-button teaser-primary" ${t.primary?'disabled':''} title="Cette vidéo sera envoyée en priorité">${t.primary?'Principale':'Définir principale'}</button>
+      <label class="teaser-toggle"><input type="checkbox" class="teaser-active" ${t.active?'checked':''} ${state.demo?'':''}> Active</label>
+      <button type="button" class="text-button teaser-delete">Supprimer</button>
+    </div>
+  </article>`).join('');
+}
+async function loadTeasers(){
+  if(state.demo){renderTeasers();return;}
+  if(!credentials){teasers=[];renderTeasers();return;}
+  try{
+    const data=await request('/api/teasers');
+    teasers=Array.isArray(data.teasers)?data.teasers:[];
+    renderTeasers();
+  }catch(error){toast(error.message||'Impossible de charger les avant-goûts.');}
+}
+async function uploadTeaser(){
+  if(state.demo){toast('Mode démo : l’upload est désactivé. Connectez Telegram pour ajouter de vraies vidéos.');return;}
+  const input=$('teaser-file');
+  const file=input.files&&input.files[0];
+  if(!file)throw Error('Choisissez une vidéo à uploader.');
+  if(file.size>15*1024*1024)throw Error('Fichier trop volumineux (max 15 Mo).');
+  const form=new FormData();
+  form.append('file',file,file.name);
+  const label=$('teaser-label').value.trim();
+  if(label)form.append('label',label);
+  if(!credentials)throw Error('Connectez-vous à votre espace.');
+  const epoch=connectionEpoch;
+  const response=await fetch(credentials.url+'/api/teasers',{method:'POST',headers:{Authorization:'Bearer '+credentials.key},body:form,signal:AbortSignal.timeout(120000),credentials:'omit',redirect:'error'});
+  if(epoch!==connectionEpoch)throw Error('La session a changé. Reconnectez-vous.');
+  let data;try{data=await response.json();}catch{throw Error('Le serveur n’a pas renvoyé une réponse valide.');}
+  if(response.status===401){showLogin('Votre session a expiré. Reconnectez-vous.');}
+  if(!response.ok)throw Error(data.error||'Upload impossible.');
+  input.value='';$('teaser-label').value='';
+  await loadTeasers();
+  toast('Avant-goût ajouté.');
+}
+async function toggleTeaser(id){
+  if(state.demo){
+    const t=demoTeasers.find(x=>x.id===id);if(t)t.active=!t.active;renderTeasers();toast(t&&t.active?'Vidéo activée (démo).':'Vidéo désactivée (démo).');return;
+  }
+  await request('/api/teasers/'+encodeURIComponent(id)+'/toggle','POST',{});
+  await loadTeasers();
+  toast('Statut mis à jour.');
+}
+async function setPrimaryTeaser(id){
+  if(state.demo){
+    demoTeasers.forEach(t=>{t.primary=t.id===id;});
+    renderTeasers();toast('Vidéo principale (démo).');return;
+  }
+  await request('/api/teasers/'+encodeURIComponent(id)+'/primary','POST',{});
+  await loadTeasers();
+  toast('Avant-goût principal défini.');
+}
+async function deleteTeaser(id){
+  if(state.demo){
+    const i=demoTeasers.findIndex(x=>x.id===id);if(i>=0)demoTeasers.splice(i,1);renderTeasers();toast('Vidéo retirée de la démo.');return;
+  }
+  if(!confirm('Supprimer cet avant-goût ?'))return;
+  await request('/api/teasers/'+encodeURIComponent(id),'DELETE');
+  await loadTeasers();
+  toast('Avant-goût supprimé.');
+}
 document.querySelectorAll('[data-view]').forEach(b=>b.addEventListener('click',()=>setView(b.dataset.view)));
 $('search').addEventListener('input',renderList);
 document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('selected',x===b));renderList();}));
@@ -68,6 +144,9 @@ $('glossary-add').addEventListener('click',()=>{glossaryRows.push({expression:''
 $('glossary-rows').addEventListener('click',event=>{const row=event.target.closest('.glossary-row');if(!row||!event.target.closest('.glossary-remove'))return;glossaryRows.splice(Number(row.dataset.index),1);renderGlossary();});
 $('glossary-rows').addEventListener('input',event=>{const row=event.target.closest('.glossary-row');if(!row)return;const entry=glossaryRows[Number(row.dataset.index)];if(!entry)return;if(event.target.classList.contains('glossary-expression'))entry.expression=event.target.value;if(event.target.classList.contains('glossary-replacement'))entry.replacement=event.target.value;});
 $('glossary-form').addEventListener('submit',event=>{event.preventDefault();busy(event.submitter,async()=>{const glossary=glossaryRows.map(e=>({expression:e.expression.trim(),replacement:e.replacement.trim()})).filter(e=>e.expression);await saveSettings({...state.settings,glossary});loadGlossary();$('glossary-save-status').textContent=state.demo?'Enregistré pour cette démonstration.':'Glossaire enregistré.';toast(state.demo?'Glossaire mis à jour dans la démo.':'Glossaire enregistré sur le serveur.');});});
+$('teaser-upload').addEventListener('click',()=>busy($('teaser-upload'),uploadTeaser));
+$('teaser-list').addEventListener('click',event=>{const item=event.target.closest('.teaser-item');if(!item)return;const id=item.dataset.id;if(event.target.closest('.teaser-primary'))busy(event.target,()=>setPrimaryTeaser(id));else if(event.target.closest('.teaser-delete'))busy(event.target,()=>deleteTeaser(id));});
+$('teaser-list').addEventListener('change',event=>{const item=event.target.closest('.teaser-item');if(!item||!event.target.classList.contains('teaser-active'))return;busy(event.target,()=>toggleTeaser(item.dataset.id));});
 $('connect-open').addEventListener('click',()=>state.demo?showLogin():busy($('connect-open'),logout));
 $('connect-banner').addEventListener('click',()=>showLogin());
 $('logout').addEventListener('click',()=>busy($('logout'),logout));
@@ -87,10 +166,10 @@ $('connect-form').addEventListener('submit',event=>{
       if(!response.ok)throw Error(session.error||'Connexion refusée.');
       if(typeof session.token!=='string'||!Number.isFinite(session.expires_in)||session.expires_in<=0)throw Error('Réponse de connexion invalide.');
       const auth={url:url.origin,key:session.token};const data=await request('/api/state','GET',undefined,auth);
-      if(!Array.isArray(data.chats)||!data.settings)throw Error('Cette adresse ne correspond pas au serveur Relais.');
+      if(!Array.isArray(data.chats)||!data.settings)throw Error('Cette adresse ne correspond pas au serveur NTGM.FR.');
       clearPrivateState();credentials=auth;state={...data,demo:false};selected=state.chats[0]?.id??null;
       try{localStorage.setItem('relais-server-url',url.origin);}catch{}
-      $('server-details').open=false;$('login-screen').hidden=true;$('panel-shell').hidden=false;document.title='Relais · Conversations';
+      $('server-details').open=false;$('login-screen').hidden=true;$('panel-shell').hidden=false;document.title='NTGM.FR · Conversations';
       sessionTimer=setTimeout(()=>showLogin('Votre session a expiré. Reconnectez-vous.'),Math.min(session.expires_in,28800)*1000);
       setView('inbox');loadSettings();render();await refresh();toast('Bienvenue dans votre espace privé.');
     }catch(error){$('connect-error').textContent=error.message||'Connexion impossible.';}

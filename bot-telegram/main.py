@@ -54,7 +54,11 @@ class TeaserStore:
             path = self.root / item['filename']
             if path.is_file():
                 out.append({**item, 'path': str(path)})
-        out.sort(key=lambda t: (float(t.get("created") or 0), str(t.get("id") or "")))
+        out.sort(key=lambda t: (
+            0 if t.get('primary') or t.get('featured') else 1,
+            float(t.get('created') or 0),
+            str(t.get('id') or ''),
+        ))
         return out
 
     def _ext_for(self, filename, content_type):
@@ -96,6 +100,7 @@ class TeaserStore:
                 'filename': dest_name,
                 'label': (label or Path(filename).stem or 'Avant-goût')[:80],
                 'active': True,
+                'primary': False,
                 'created': time.time(),
                 'size': size,
             }
@@ -119,7 +124,7 @@ class TeaserStore:
                 return item
         raise ValueError('Avant-goût introuvable.')
 
-    def update(self, ident, active=None, label=None):
+    def update(self, ident, active=None, label=None, primary=None):
         items = self._load()
         for item in items:
             if item['id'] == ident:
@@ -131,9 +136,21 @@ class TeaserStore:
                     if not isinstance(label, str) or len(label) > 80:
                         raise ValueError('Libellé invalide.')
                     item['label'] = label.strip() or item['label']
+                if primary is not None:
+                    if type(primary) is not bool:
+                        raise ValueError('primary doit être un booléen.')
+                    if primary:
+                        for other in items:
+                            other['primary'] = other['id'] == ident
+                    else:
+                        item['primary'] = False
                 self._save(items)
                 return item
         raise ValueError('Avant-goût introuvable.')
+
+    def set_primary(self, ident):
+        """Marque un avant-gout comme principal (un seul a la fois)."""
+        return self.update(ident, primary=True)
 
     def delete(self, ident):
         items = self._load()
@@ -322,10 +339,23 @@ def make_app(engine, authenticator, origins, is_connected, provider, teasers=Non
                 data = await body(request)
             except Exception:
                 data = {}
-        if 'active' in data or 'label' in data:
-            teaser = teasers.update(ident, active=data.get('active'), label=data.get('label'))
+        if 'primary' in data and data.get('primary') is True:
+            teaser = teasers.set_primary(ident)
+        elif 'active' in data or 'label' in data or 'primary' in data:
+            teaser = teasers.update(
+                ident,
+                active=data.get('active'),
+                label=data.get('label'),
+                primary=data.get('primary'),
+            )
         else:
             teaser = teasers.toggle(ident)
+        return web.json_response({'teaser': teaser})
+
+    async def set_teaser_primary(request):
+        if teasers is None:
+            raise ValueError('Avant-goûts non configurés.')
+        teaser = teasers.set_primary(request.match_info['id'])
         return web.json_response({'teaser': teaser})
 
     async def delete_teaser(request):
@@ -341,6 +371,7 @@ def make_app(engine, authenticator, origins, is_connected, provider, teasers=Non
         web.post('/api/chats/{chat}/draft', draft), web.post('/api/settings', settings),
         web.get('/api/teasers', list_teasers), web.post('/api/teasers', upload_teaser),
         web.post('/api/teasers/{id}/toggle', toggle_teaser), web.patch('/api/teasers/{id}', toggle_teaser),
+        web.post('/api/teasers/{id}/primary', set_teaser_primary),
         web.delete('/api/teasers/{id}', delete_teaser),
     ])
     return app

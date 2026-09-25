@@ -1,5 +1,5 @@
 """Etat durable et coordination."""
-# deploy-trigger: teaser oldest-first + read receipts
+# deploy-trigger: teaser primary-first + mark after send
 import asyncio, json, logging, random, re, sqlite3, time, unicodedata
 from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
@@ -145,6 +145,22 @@ def tease_delivered(store, chat_id):
         if 'avant-gout' in value and 'video' in value:
             return True
     return False
+
+
+
+def pick_teaser(active):
+    """Choisit l'avant-gout a envoyer : primary/featured actif, sinon le plus ancien."""
+    if not active:
+        return None
+    return sorted(
+        active,
+        key=lambda t: (
+            0 if t.get('primary') or t.get('featured') else 1,
+            float(t.get('created') or 0),
+            str(t.get('id') or ''),
+        ),
+    )[0]
+
 
 
 class Store:
@@ -408,31 +424,46 @@ class Engine:
                             active = list(self.get_active_teasers() or [])
                         except Exception as error:
                             logger.exception('Teasers ; conversation %s : %s', chat_id, type(error).__name__)
+                    send_failed = False
                     if (
                         latest_client and client_wants_teaser(self.store, chat_id, latest_client)
                         and not chat.get('tease_sent')
                         and active and self.send_media
                     ):
-                        # Premier actif (plus ancien) — choix stable, pas aléatoire
-                        teaser = sorted(
-                            active,
-                            key=lambda t: (float(t.get('created') or 0), str(t.get('id') or '')),
-                        )[0]
-                        path = teaser.get('path') or teaser.get('filepath')
+                        # Primary/featured actif d'abord, sinon plus ancien — choix stable
+                        teaser = pick_teaser(active)
+                        path = (teaser.get('path') or teaser.get('filepath')) if teaser else None
                         if path:
-                            message_id = await self.send_media(chat_id, path, caption=None)
-                            self.store.add(chat_id, message_id, 'ai', '[Vidéo avant-goût]')
-                            message_id = await self.transport(chat_id, reply)
-                            self.store.add(chat_id, message_id, 'ai', reply)
-                            self.store.mark_tease_sent(chat_id)
-                            sent_teaser = True
-                            print('Telegram : avant-gout video envoye.', flush=True)
-                    if not sent_teaser:
+                            try:
+                                message_id = await self.send_media(chat_id, path, caption=None)
+                                self.store.add(chat_id, message_id, 'ai', '[Vidéo avant-goût]')
+                                # Marquer seulement apres envoi media reussi (avant le texte)
+                                self.store.mark_tease_sent(chat_id)
+                                sent_teaser = True
+                                print('Telegram : avant-gout video envoye.', flush=True)
+                            except Exception as error:
+                                send_failed = True
+                                logger.exception(
+                                    'Envoi avant-gout echoue ; conversation %s : %s',
+                                    chat_id, type(error).__name__,
+                                )
+                                print(
+                                    f'Telegram : avant-gout envoi echoue ({type(error).__name__}), '
+                                    'replique texte seule (flag non pose).',
+                                    flush=True,
+                                )
+                    if sent_teaser:
+                        message_id = await self.transport(chat_id, reply)
+                        self.store.add(chat_id, message_id, 'ai', reply)
+                    else:
                         if latest_client and client_wants_teaser(self.store, chat_id, latest_client):
+                            chosen = pick_teaser(active) if active else None
+                            chosen_path = (chosen.get('path') or chosen.get('filepath')) if chosen else None
                             reason = (
                                 'deja_envoye' if chat.get('tease_sent')
                                 else 'aucun_actif' if not active
-                                else 'pas_de_chemin' if not (active and (active[0].get('path') or active[0].get('filepath')))
+                                else 'envoi_echoue' if send_failed
+                                else 'pas_de_chemin' if not chosen_path
                                 else 'send_media_absent' if not self.send_media
                                 else 'autre'
                             )

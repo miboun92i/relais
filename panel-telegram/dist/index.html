@@ -2,18 +2,22 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="description" content="Gérez vos conversations Telegram et gardez la main sur les réponses de votre assistant.">
-  <title>Relais · Conversations</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="app.js" defer></script>
+  <title>NTGM.FR · Conversations</title>
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="logo.png">
+  <link rel="stylesheet" href="style.css?v=tease-20260925">
+  <script src="app.js?v=tease-20260925" defer></script>
 </head>
 <body>
 <section id="login-screen" class="login-screen" aria-labelledby="login-title">
   <div class="login-story">
-    <a class="brand" href="./"><span class="brand-icon">r</span><span>relais<span class="brand-dot">.</span></span></a>
+    <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"><img class="brand-logo" src="logo.png" alt="" width="36" height="36"><span class="brand-sparkle">✦</span></span><span class="brand-word">ntgm<span class="brand-dot">.</span>fr</span></a>
     <div class="login-story-copy">
       <span class="eyebrow">Espace privé</span>
       <h1>Vos conversations.<br>Votre contrôle.</h1>
@@ -23,7 +27,7 @@
   </div>
   <div class="login-main">
     <form id="connect-form" class="login-card" method="post" action="#">
-      <span class="login-lock" aria-hidden="true">⌂</span>
+      <span class="login-lock" aria-hidden="true"><img class="login-logo" src="logo.png" alt="" width="28" height="28"></span>
       <span class="eyebrow">Bienvenue</span>
       <h2 id="login-title">Se connecter</h2>
       <p class="login-intro">Identifiez-vous pour accéder à vos conversations et à votre assistant.</p>
@@ -54,12 +58,13 @@
 
 <div class="shell" id="panel-shell" hidden>
   <aside class="rail">
-    <a class="brand" href="./" aria-label="Relais, accueil"><span class="brand-icon">r</span><span>relais<span class="brand-dot">.</span></span></a>
+    <a class="brand" href="./" aria-label="NTGM.FR, accueil"><span class="brand-mark" aria-hidden="true"><img class="brand-logo" src="logo.png" alt="" width="36" height="36"><span class="brand-sparkle">✦</span></span><span class="brand-word">ntgm<span class="brand-dot">.</span>fr</span></a>
     <div class="workspace">Espace de travail</div>
     <nav aria-label="Navigation principale">
       <button class="nav active" data-view="inbox"><span class="nav-ico">▣</span> Conversations <b id="nav-count">4</b></button>
       <button class="nav" data-view="settings"><span class="nav-ico">✦</span> Mon assistant</button>
       <button class="nav" data-view="glossary"><span class="nav-ico">≡</span> Glossaire</button>
+      <button class="nav" data-view="teasers"><span class="nav-ico">▶</span> Avant-goûts</button>
     </nav>
     <div class="rail-bottom">
       <div class="helper">
@@ -217,6 +222,35 @@
         </div>
       </form>
     </section>
+
+    <section id="teasers-view" class="settings-view" hidden>
+      <div class="settings-intro">
+        <span class="eyebrow">Avant-goûts</span>
+        <h2>Vos vidéos teasing.</h2>
+        <p>Uploadez 2 à 8 courtes vidéos. Quand un client demande un avant-goût, un tease, un aperçu ou une preview, le bot en envoie <strong>une seule</strong> — une fois par conversation. La vidéo marquée <strong>Principale</strong> est prioritaire ; sinon la plus ancienne active.</p>
+      </div>
+      <div class="form-card teaser-upload-card">
+        <h3>Ajouter une vidéo</h3>
+        <div class="teaser-upload-row">
+          <label class="teaser-file">
+            <span>Fichier (MP4, WebM, MOV — max 15 Mo)</span>
+            <input id="teaser-file" type="file" accept="video/mp4,video/webm,video/quicktime">
+          </label>
+          <label class="teaser-label-field">
+            <span>Libellé (optionnel)</span>
+            <input id="teaser-label" type="text" maxlength="80" placeholder="ex. tease douche">
+          </label>
+          <button id="teaser-upload" type="button" class="button primary">Uploader</button>
+        </div>
+        <p class="field-help">Formats acceptés : MP4, WebM, QuickTime. Maximum 8 vidéos actives ou non.</p>
+      </div>
+      <div class="form-card">
+        <h3>Bibliothèque</h3>
+        <div id="teaser-list" class="teaser-list"></div>
+        <p id="teaser-empty" class="field-help">Aucune vidéo pour l’instant. Ajoutez-en au moins deux pour démarrer.</p>
+      </div>
+    </section>
+
   </main>
 </div>
 
