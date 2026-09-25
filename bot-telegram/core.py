@@ -72,7 +72,7 @@ def needs_human_output(text):
     return '[relais_humain]' in value or bool(re.search(r"\\b(?:je suis|i am|i'm) (?:un |une |a |an )?(?:ia|bot|robot|assistant)\\b", value))
 
 def wants_teaser(text):
-    """Detecte une demande d'avant-gout / tease / preview (FR, accents normalises)."""
+    """Detecte une demande d'avant-gout / tease / preview / photo (FR, accents normalises)."""
     value = normalized(text or '')
     if not value.strip():
         return False
@@ -83,13 +83,62 @@ def wants_teaser(text):
         r"\bpreview\b",
         r"\bapercu\b",
         r"un[e]? apercu",
-        r"montre[- ]?(?:moi )?(?:un peu|qqch|quelque chose|un truc)",
-        r"envoyer?[ -]?(?:un )?tease",
+        r"petit apercu",
+        r"montre[- ]?(?:moi )?(?:un peu|qqch|quelque chose|un truc|une? (?:photo|video|image))?",
+        r"envoyer?[ -]?(?:moi )?(?:un |une |le |la |du |de la )?(?:tease|apercu|avant|photo|video|image|nude|pack)?",
+        r"envoie[- ]?(?:moi )?(?:un |une |le |la )?(?:tease|apercu|avant|photo|video|image|nude)?",
+        r"envoi(?:e|er)?[- ]?(?:moi )?(?:un |une |le |la )?(?:tease|apercu|avant|photo|video|image|nude)?",
         r"voir un peu",
         r"un petit apercu",
-        r"donne[- ]?(?:moi )?(?:un )?avant",
+        r"donne[- ]?(?:moi )?(?:un |une )?(?:avant|apercu|tease|photo|video)",
+        r"\b(?:une?|des)?\s*photos?\b",
+        r"\b(?:une?|des)?\s*videos?\b",
+        r"\bpic(?:s)?\b",
     ]
-    return any(re.search(p, value) for p in patterns)
+    if any(re.search(p, value) for p in patterns):
+        return True
+    # Court oui/ok/vas-y apres une offre d'apercu : traite comme demande (le moteur regarde aussi l'historique)
+    if re.fullmatch(r"(?:oui|ouais|ok|okay|yes|yep|go|vas[- ]?y|envoie|envoi|stp|s'?il te plait|siltp|svp)", value.strip()):
+        return True
+    return False
+
+
+def client_wants_teaser(store, chat_id, latest_client=None):
+    """True si le dernier message client demande un avant-gout, ou valide une offre recente du bot."""
+    if latest_client is None:
+        latest_client = None
+        for m in reversed(store.messages(chat_id, 8)):
+            if m['source'] == 'client':
+                latest_client = m['text']
+                break
+    if not latest_client:
+        return False
+    if wants_teaser(latest_client):
+        # Oui/ok seuls : seulement si le bot vient de proposer un apercu/photo
+        value = normalized(latest_client)
+        if re.fullmatch(r"(?:oui|ouais|ok|okay|yes|yep|go|vas[- ]?y|envoie|envoi|stp|s'?il te plait|siltp|svp)", value.strip()):
+            for m in reversed(store.messages(chat_id, 8)):
+                if m['source'] == 'ai':
+                    bot = normalized(m['text'] or '')
+                    if re.search(r"apercu|avant[- ]?gout|tease|photo|video|preview|montre", bot):
+                        return True
+                    return False
+            return False
+        return True
+    return False
+
+
+def tease_delivered(store, chat_id):
+    """True si une video avant-gout a bien ete enregistree dans l'historique."""
+    for m in store.messages(chat_id, 80):
+        if m.get('source') != 'ai':
+            continue
+        value = normalized(m.get('text') or '')
+        if 'video avant-gout' in value or 'video avant gout' in value or '[video avant-gout]' in value:
+            return True
+        if 'avant-gout' in value and 'video' in value:
+            return True
+    return False
 
 
 class Store:
@@ -176,6 +225,9 @@ class Store:
     def mark_tease_sent(self, chat_id):
         self.db.execute('UPDATE chats SET tease_sent=1 WHERE id=?', (chat_id,))
         self.db.commit()
+    def clear_tease_sent(self, chat_id):
+        self.db.execute('UPDATE chats SET tease_sent=0 WHERE id=?', (chat_id,))
+        self.db.commit()
 
 class Engine:
     def __init__(self, store, transport, generate, mark_read=None, simulate_typing=None, delay_min=1.8, delay_max=3.8, *, delay=None, retry_delays=(5, 15), send_media=None, get_active_teasers=None):
@@ -248,8 +300,12 @@ class Engine:
                 if m['source'] == 'client':
                     latest_client = m['text']
                     break
-            if latest_client and wants_teaser(latest_client):
+            if latest_client and client_wants_teaser(self.store, chat_id, latest_client):
                 chat = self.store.chat(chat_id) or {}
+                if chat.get('tease_sent') and not tease_delivered(self.store, chat_id):
+                    self.store.clear_tease_sent(chat_id)
+                    chat = self.store.chat(chat_id) or {}
+                    print('Telegram : flag avant-gout reinitialise (pas de video en historique).', flush=True)
                 active = []
                 if self.get_active_teasers:
                     try:
@@ -331,6 +387,11 @@ class Engine:
                             latest_client = m['text']
                             break
                     chat = self.store.chat(chat_id) or {}
+                    # Si le flag est pose sans video en historique (echec d'envoi / ancien bug), on reautorise
+                    if chat.get('tease_sent') and not tease_delivered(self.store, chat_id):
+                        self.store.clear_tease_sent(chat_id)
+                        chat = self.store.chat(chat_id) or {}
+                        print('Telegram : flag avant-gout reinitialise (pas de video en historique).', flush=True)
                     active = []
                     if self.get_active_teasers:
                         try:
@@ -338,7 +399,7 @@ class Engine:
                         except Exception as error:
                             logger.exception('Teasers ; conversation %s : %s', chat_id, type(error).__name__)
                     if (
-                        latest_client and wants_teaser(latest_client)
+                        latest_client and client_wants_teaser(self.store, chat_id, latest_client)
                         and not chat.get('tease_sent')
                         and active and self.send_media
                     ):
@@ -357,6 +418,15 @@ class Engine:
                             sent_teaser = True
                             print('Telegram : avant-gout video envoye.', flush=True)
                     if not sent_teaser:
+                        if latest_client and client_wants_teaser(self.store, chat_id, latest_client):
+                            reason = (
+                                'deja_envoye' if chat.get('tease_sent')
+                                else 'aucun_actif' if not active
+                                else 'pas_de_chemin' if not (active and (active[0].get('path') or active[0].get('filepath')))
+                                else 'send_media_absent' if not self.send_media
+                                else 'autre'
+                            )
+                            print(f'Telegram : avant-gout non envoye ({reason}).', flush=True)
                         message_id = await self.transport(chat_id, reply)
                         self.store.add(chat_id, message_id, 'ai', reply)
                 except Exception:

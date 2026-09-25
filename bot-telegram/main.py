@@ -515,24 +515,28 @@ async def main():
             await client.send_message(chat_id, caption, parse_mode=None, link_preview=False)
         return message.id
     async def mark_read(chat_id):
-        # Accusé basé sur le dernier message Telegram (pas seulement la DB locale)
+        # Accusé sur les messages entrants du peer (ids Telegram réels)
         entity = await client.get_input_entity(chat_id)
         max_id = 0
         try:
-            latest = await client.get_messages(entity, limit=1)
-            if latest:
-                max_id = latest[0].id
+            # Prendre plusieurs messages pour ne pas manquer un id client
+            latest = await client.get_messages(entity, limit=20)
+            for msg in latest or []:
+                if getattr(msg, 'id', None):
+                    max_id = max(max_id, int(msg.id))
         except Exception as error:
             logger.exception('Lecture Telegram ; conversation %s : %s', chat_id, type(error).__name__)
         if not max_id:
-            messages = store.messages(chat_id, 1)
-            if messages:
-                max_id = messages[-1]['telegram_id']
+            messages = store.messages(chat_id, 5)
+            for row in messages or []:
+                tid = row.get('telegram_id')
+                if tid:
+                    max_id = max(max_id, int(tid))
         if max_id:
-            await client.send_read_acknowledge(entity, max_id=max_id)
+            await client.send_read_acknowledge(entity, max_id=max_id, clear_mentions=True)
         else:
-            await client.send_read_acknowledge(entity)
-        print('Telegram : accusé de lecture accepté.', flush=True)
+            await client.send_read_acknowledge(entity, clear_mentions=True)
+        print(f'Telegram : accusé de lecture accepté (max_id={max_id}).', flush=True)
 
 
     async def simulate_typing(chat_id, text):
