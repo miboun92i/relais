@@ -21,17 +21,59 @@ def temporary_ai_error(error):
 def plain_response(text):
     return text.replace('**', '').strip()
 
+def clip_reply(text, max_words=12):
+    """Force Telegram-short replies; keep a payment URL if present."""
+    text = plain_response(text)
+    if not text:
+        return text
+    urls = re.findall(r'https?://\S+|paypal\.me/\S+', text, flags=re.I)
+    # Hide URLs so sentence split does not cut on dots inside paypal.me / https://...
+    masked = text
+    for i, u in enumerate(urls):
+        masked = masked.replace(u, f'URL{i}')
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    m = re.search(r'.+?[.!?]', masked, flags=re.DOTALL)
+    if m:
+        candidate = m.group(0).strip()
+        for i, u in enumerate(urls):
+            candidate = candidate.replace(f'URL{i}', u)
+        if 3 <= len(candidate.split()) <= max_words + 2:
+            text = candidate
+            words = text.split()
+    if len(words) > max_words:
+        # Prefer keeping a short lead-in + full URL over a mangled cut
+        dangling = {'de','du','des','le','la','les','un','une','et','ou','a','à','pour','que','qui','ce','cet','cette','mon','ma','mes','ton','ta','tes','au','aux','en','d','l','y','sur','avec'}
+        def tidy(parts):
+            while parts and parts[-1].lower().rstrip(',;:') in dangling:
+                parts.pop()
+            return ' '.join(parts).rstrip(',;:')
+        if urls:
+            lead = []
+            for w in words:
+                if w in urls or any(w.startswith(u.rstrip('.,;:!?)')) for u in urls):
+                    break
+                lead.append(w)
+                if len(lead) >= max(3, max_words - 1):
+                    break
+            text = (tidy(lead) + ' ' + urls[0]).strip()
+        else:
+            text = tidy(words[:max_words])
+    return text.strip()
+
 DEFAULTS = {'enabled': False, 'tone': 'Reponds en francais, ton naturel.', 'catalog': '', 'faq': '', 'daily_limit': 100, 'glossary': []}
 BASE_PROMPT = '''Tu parles au nom de ce compte Telegram, a la premiere personne.
 Tu tiens toute la conversation toute seule, de A a Z.
 Suis le TON, les PRESTATIONS et la FAQ du panel.
 Style: phrases courtes, orales, dragueuses, jamais robotiques.
-LONGUEUR (DUR):
-- Maximum 1 phrase (2 max si vraiment nécessaire)
-- Maximum ~12–18 mots
+LONGUEUR (DUR, PRIORITAIRE):
+- 1 seule phrase (presque jamais 2)
+- Maximum ~8–12 mots
 - Une seule idée par message
 - Abréviations OK (tkt, mdr, jsp)
 - Interdit: listes, pavés, explications longues, plusieurs questions d’affilée
+- Exception: si le client demande comment payer, tu peux ajouter le lien/moyen en une phrase courte
 Interdits: prestation, renseignement, assistant, IA, bot.
 Discute normalement puis oriente vers nudes/cam/VIP.
 Si le tarif est dans PRESTATIONS, donne-le.
@@ -339,7 +381,7 @@ class Engine:
                 elif not active:
                     teaser_note = '\nCONTEXTE AVANT-GOUT\nLe client demande un avant-gout mais aucune video n est active. Tease verbalement tres court ou dis d attendre un peu. N invente pas avoir envoye une video.\n'
                 else:
-                    teaser_note = '\nCONTEXTE AVANT-GOUT\nLe systeme peut joindre une video. Garde ta reponse TRES courte (1 phrase). Ne pretend pas avoir envoye une video dans le texte seul. N invente aucun nom de fichier.\n'
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\nLe systeme peut joindre une video. Garde ta reponse ULTRA courte (max ~8 mots, 1 phrase). Ne pretend pas avoir envoye une video dans le texte seul. N invente aucun nom de fichier.\n'
             prompt = BASE_PROMPT + teaser_note + '\nTON\n' + settings['tone'] + '\nPRESTATIONS\n' + settings['catalog'] + '\nFAQ\n' + settings['faq']
             messages = [{'role': 'user' if m['source'] == 'client' else 'assistant', 'content': (apply_glossary(m['text'], settings['glossary']) if m['source'] == 'client' else m['text'])[:8000]} for m in self.store.messages(chat_id, 12)]
             while messages and messages[0]['role'] != 'user':
@@ -364,11 +406,7 @@ class Engine:
                     self.set_mode(chat_id, 'manual')
                     raise HumanHandoffRequired('Le client dit avoir paye ou envoie une preuve. Reprenez pour encaisser.')
                 text = text.replace('[RELAIS_HUMAIN]', '').replace('[relais_humain]', '').strip() or 'ok dis-moi juste ce que tu veux'
-            text = plain_response(text)
-            if len(text.split()) > 22:
-                m = re.search(r'.+?[.!?]', text, flags=re.DOTALL)
-                if m and len(m.group(0).split()) >= 3:
-                    text = m.group(0).strip()
+            text = clip_reply(text, max_words=12)
             if not text:
                 raise ValueError('Reponse vide.')
             return text[:4000]
