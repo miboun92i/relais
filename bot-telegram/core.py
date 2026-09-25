@@ -21,7 +21,7 @@ def temporary_ai_error(error):
 def plain_response(text):
     return text.replace('**', '').strip()
 
-def clip_reply(text, max_words=12):
+def clip_reply(text, max_words=14):
     """Force Telegram-short replies; keep a payment URL if present."""
     text = plain_response(text)
     if not text:
@@ -69,7 +69,7 @@ Suis le TON, les PRESTATIONS et la FAQ du panel.
 Style: phrases courtes, orales, dragueuses, jamais robotiques.
 LONGUEUR (DUR, PRIORITAIRE):
 - 1 seule phrase (presque jamais 2)
-- Maximum ~8–12 mots
+- Maximum ~8–14 mots
 - Une seule idée par message
 - Abréviations OK (tkt, mdr, jsp)
 - Interdit: listes, pavés, explications longues, plusieurs questions d’affilée
@@ -96,6 +96,14 @@ HANDOFF_FALLBACKS = [
     'recu, je check ca 2 min',
     'ok envoie la preuve si t as pas deja, je regarde',
 ]
+
+EMPTY_FALLBACKS = [
+    'mdr dis moi',
+    'haha et toi',
+    'ok dis moi ce que tu veux',
+    'jsuis la dis moi',
+]
+
 
 def apply_glossary(text, glossary):
     for entry in glossary or []:
@@ -349,6 +357,22 @@ class Engine:
         task = asyncio.create_task(self.auto_reply(chat_id, chat['revision'], self.epoch))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+    def catch_up_pending(self):
+        """Relance l'auto-réponse si le dernier message est client (ex: IA vide pendant la nuit)."""
+        if not self.store.settings().get('enabled'):
+            print('Rattrapage : IA désactivée, rien à faire.', flush=True)
+            return 0
+        n = 0
+        for chat in self.store.chats():
+            if chat.get('mode') != 'auto':
+                continue
+            msgs = self.store.messages(chat['id'], 1)
+            if not msgs or msgs[-1].get('source') != 'client':
+                continue
+            self.incoming(chat['id'])
+            n += 1
+        print(f'Reponse automatique : rattrapage de {n} conversation(s) en attente.', flush=True)
+        return n
     async def draft(self, chat_id, *, manual_on_handoff=True):
         latest = self.store.messages(chat_id, 1)
         if latest and latest[-1]['source'] == 'client' and needs_payment_handoff(latest[-1]['text']):
@@ -381,7 +405,7 @@ class Engine:
                 elif not active:
                     teaser_note = '\nCONTEXTE AVANT-GOUT\nLe client demande un avant-gout mais aucune video n est active. Tease verbalement tres court ou dis d attendre un peu. N invente pas avoir envoye une video.\n'
                 else:
-                    teaser_note = '\nCONTEXTE AVANT-GOUT\nLe systeme peut joindre une video. Garde ta reponse ULTRA courte (max ~8 mots, 1 phrase). Ne pretend pas avoir envoye une video dans le texte seul. N invente aucun nom de fichier.\n'
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\nLe systeme peut joindre une video. Garde ta reponse tres courte (max ~12 mots, 1 phrase). Ne pretend pas avoir envoye une video dans le texte seul. N invente aucun nom de fichier.\n'
             prompt = BASE_PROMPT + teaser_note + '\nTON\n' + settings['tone'] + '\nPRESTATIONS\n' + settings['catalog'] + '\nFAQ\n' + settings['faq']
             messages = [{'role': 'user' if m['source'] == 'client' else 'assistant', 'content': (apply_glossary(m['text'], settings['glossary']) if m['source'] == 'client' else m['text'])[:8000]} for m in self.store.messages(chat_id, 12)]
             while messages and messages[0]['role'] != 'user':
@@ -399,16 +423,18 @@ class Engine:
                     self.set_mode(chat_id, 'manual')
                 raise HumanHandoffRequired('IA refusee.') from error
             if not text:
-                raise ValueError('Reponse vide.')
+                text = random.choice(EMPTY_FALLBACKS)
+                print('IA : reponse vide, secours court utilise.', flush=True)
             if needs_human_output(text):
                 if '[relais_humain]' in text.lower().replace(' ', ''):
                     # Toujours passer en manuel : sinon la phrase de secours boucle en auto.
                     self.set_mode(chat_id, 'manual')
                     raise HumanHandoffRequired('Le client dit avoir paye ou envoie une preuve. Reprenez pour encaisser.')
                 text = text.replace('[RELAIS_HUMAIN]', '').replace('[relais_humain]', '').strip() or 'ok dis-moi juste ce que tu veux'
-            text = clip_reply(text, max_words=12)
+            text = clip_reply(text, max_words=14)
             if not text:
-                raise ValueError('Reponse vide.')
+                text = random.choice(EMPTY_FALLBACKS)
+                print('IA : reponse vide, secours court utilise.', flush=True)
             return text[:4000]
     async def auto_reply(self, chat_id, revision, epoch):
         delivery_uncertain = False
@@ -418,13 +444,7 @@ class Engine:
             await asyncio.sleep(wait)
             if not self.valid(chat_id, revision, epoch):
                 return
-            if self.mark_read:
-                try:
-                    await self.mark_read(chat_id)
-                except Exception as error:
-                    logger.exception('Lecture Telegram ; conversation %s : %s', chat_id, type(error).__name__)
-            if not self.valid(chat_id, revision, epoch):
-                return
+            # Accusé de lecture après envoi réussi seulement (évite chats ouverts sans réponse)
             handoff = None
             try:
                 reply = await self.automatic_draft(chat_id, revision, epoch)
@@ -493,6 +513,12 @@ class Engine:
                     if sent_teaser:
                         message_id = await self.transport(chat_id, reply)
                         self.store.add(chat_id, message_id, 'ai', reply)
+
+                        if self.mark_read:
+                            try:
+                                await self.mark_read(chat_id)
+                            except Exception as error:
+                                logger.exception('Lecture Telegram ; conversation %s : %s', chat_id, type(error).__name__)
                     else:
                         if latest_client and client_wants_teaser(self.store, chat_id, latest_client):
                             chosen = pick_teaser(active) if active else None
@@ -508,6 +534,12 @@ class Engine:
                             print(f'Telegram : avant-gout non envoye ({reason}).', flush=True)
                         message_id = await self.transport(chat_id, reply)
                         self.store.add(chat_id, message_id, 'ai', reply)
+
+                        if self.mark_read:
+                            try:
+                                await self.mark_read(chat_id)
+                            except Exception as error:
+                                logger.exception('Lecture Telegram ; conversation %s : %s', chat_id, type(error).__name__)
                 except Exception:
                     delivery_uncertain = True
                     self.report_error(chat_id, 'Envoi incertain.')
