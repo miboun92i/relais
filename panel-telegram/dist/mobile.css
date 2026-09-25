@@ -1,0 +1,49 @@
+/* Contrôles IA visibles sur mobile — le panneau latéral est masqué sous 1180px */
+@media (max-width: 1180px) {
+  .thread-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .thread-heading #takeover {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 860px) {
+  .thread-heading {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 14px;
+    background: var(--bg-2);
+  }
+  .thread-heading .person { width: 100%; }
+  .thread-heading #takeover {
+    width: 100%;
+    min-height: 46px;
+    margin-left: 0;
+    font-size: 1rem;
+    background: linear-gradient(180deg, #f4a4c8, #e891b8);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 4px 14px rgba(232, 145, 184, .35);
+  }
+  .mode-strip {
+    padding: 10px 14px;
+    font-size: .8rem;
+  }
+  .conversation-list { max-height: 32vh; }
+  .thread { min-height: 58dvh; }
+  .composer {
+    position: sticky;
+    bottom: 0;
+    margin: 0;
+    border-radius: 14px 14px 0 0;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  .composer-bottom .button { min-height: 44px; flex: 1; }
+  .top-actions { width: 100%; justify-content: flex-start; }
+}
