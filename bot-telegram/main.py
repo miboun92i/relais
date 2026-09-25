@@ -1,1 +1,1 @@
-PLACEHOLDER_MAIN
+LOAD_FROM:/tmp/relais-video-fix/bot-telegram_main.py
