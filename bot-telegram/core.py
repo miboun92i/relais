@@ -26,6 +26,12 @@ BASE_PROMPT = '''Tu parles au nom de ce compte Telegram, a la premiere personne.
 Tu tiens toute la conversation toute seule, de A a Z.
 Suis le TON, les PRESTATIONS et la FAQ du panel.
 Style: phrases courtes, orales, dragueuses, jamais robotiques.
+LONGUEUR (DUR):
+- Maximum 1 phrase (2 max si vraiment nécessaire)
+- Maximum ~12–18 mots
+- Une seule idée par message
+- Abréviations OK (tkt, mdr, jsp)
+- Interdit: listes, pavés, explications longues, plusieurs questions d’affilée
 Interdits: prestation, renseignement, assistant, IA, bot.
 Discute normalement puis oriente vers nudes/cam/VIP.
 Si le tarif est dans PRESTATIONS, donne-le.
@@ -343,6 +349,10 @@ class Engine:
                     raise HumanHandoffRequired('Le client dit avoir paye ou envoie une preuve. Reprenez pour encaisser.')
                 text = text.replace('[RELAIS_HUMAIN]', '').replace('[relais_humain]', '').strip() or 'ok dis-moi juste ce que tu veux'
             text = plain_response(text)
+            if len(text.split()) > 22:
+                m = re.search(r'.+?[.!?]', text, flags=re.DOTALL)
+                if m and len(m.group(0).split()) >= 3:
+                    text = m.group(0).strip()
             if not text:
                 raise ValueError('Reponse vide.')
             return text[:4000]

@@ -421,14 +421,14 @@ async def main():
         openai_client = AsyncOpenAI(api_key=os.environ['OPENAI_API_KEY'], timeout=50, max_retries=0)
     async def generate(prompt, messages):
         if provider == 'anthropic':
-            result = await anthropic_client.messages.create(model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-5'), max_tokens=500, system=prompt, messages=messages)
+            result = await anthropic_client.messages.create(model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-5'), max_tokens=70, system=prompt, messages=messages)
             return ''.join(block.text for block in result.content if block.type == 'text')
         if provider == 'openai':
             result = await openai_client.responses.create(
                 model=os.getenv('OPENAI_MODEL', 'gpt-5-mini'),
                 instructions=prompt,
                 input=messages,
-                max_output_tokens=500,
+                max_output_tokens=70,
             )
             return result.output_text
         ollama_url = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
@@ -438,7 +438,7 @@ async def main():
         model = os.getenv('OLLAMA_MODEL', '').strip()
         if not model:
             raise ValueError('Renseignez OLLAMA_MODEL avec le nom du modèle installé.')
-        async with http.post(ollama_url + '/api/chat', json={'model': model, 'stream': False, 'messages': [{'role': 'system', 'content': prompt}] + messages, 'options': {'num_predict': 500}}, allow_redirects=False) as response:
+        async with http.post(ollama_url + '/api/chat', json={'model': model, 'stream': False, 'messages': [{'role': 'system', 'content': prompt}] + messages, 'options': {'num_predict': 70}}, allow_redirects=False) as response:
             response.raise_for_status()
             return (await response.json())['message']['content']
     teasers = TeaserStore(DATA_DIR / 'teasers')
