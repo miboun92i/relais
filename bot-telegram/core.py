@@ -1,1 +1,1 @@
-PLACEHOLDER_READ_FROM_FILE
+@/tmp/core-payment-fix.py
