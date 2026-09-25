@@ -1,4 +1,10 @@
-# Remplacer par le domaine qui pointe vers votre serveur.
-telegram.votre-domaine.fr {
+# Panel statique + API Relais sur ntgm.fr
+telegram.ntgm.fr {
     reverse_proxy 127.0.0.1:8787
+}
+
+panel.ntgm.fr {
+    root * /opt/relais/panel-telegram/dist
+    file_server
+    encode gzip
 }
