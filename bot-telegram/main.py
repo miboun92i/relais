@@ -439,6 +439,15 @@ async def main():
     if not origins or '*' in origins:
         raise SystemExit('Renseigne PANEL_ORIGINS avec l’adresse exacte du panel, sans chemin.')
     store = Store(DATA_DIR / 'conversations.sqlite3')
+    forced = os.getenv('DAILY_LIMIT', '').strip()
+    if forced.isdigit():
+        forced_n = int(forced)
+        if 1 <= forced_n <= 1000:
+            current = store.settings()
+            if current.get('daily_limit') != forced_n:
+                current['daily_limit'] = forced_n
+                store.save_settings(current)
+                print(f'Plafond quotidien IA forcé à {forced_n} (DAILY_LIMIT).', flush=True)
     # Conserver le choix enregistré, y compris une pause volontaire.
     client = TelegramClient(str(DATA_DIR / 'compte'), api_id, os.environ['TELEGRAM_API_HASH'])
     http = ClientSession(timeout=ClientTimeout(total=55))
