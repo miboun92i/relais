@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Gérez vos conversations Telegram et gardez la main sur les réponses de votre assistant.">
+  <title>NTGM.FR · Conversations</title>
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="logo.png">
+  <link rel="stylesheet" href="style.css?v=tease-20260925">
+  <script src="app.js?v=tease-20260925" defer></script>
+</head>
+<body>
+<!-- panel Avant-goûts: see live IONOS deploy; full index synced via SFTP -->
+<section id="teasers-marker">Avant-goûts</section>
+</body>
+</html>
