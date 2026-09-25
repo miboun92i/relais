@@ -1,4 +1,5 @@
 """Etat durable et coordination."""
+# deploy-trigger: teaser oldest-first + read receipts
 import asyncio, json, logging, random, re, sqlite3, time, unicodedata
 from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
