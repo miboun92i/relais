@@ -155,7 +155,19 @@ def make_app(engine, authenticator, origins, is_connected, provider):
 async def main():
     os.umask(0o077)
     load_dotenv(ROOT / '.env')
-    authenticator = Auth.from_file(DATA_DIR / 'panel-account.json')
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    account_path = DATA_DIR / 'panel-account.json'
+    account_env = os.getenv('PANEL_ACCOUNT_JSON')
+    if account_env and not account_path.exists():
+        account_path.write_text(account_env, encoding='utf-8')
+        print('Bootstrap : panel-account.json écrit depuis l\'environnement.', flush=True)
+    session_path = DATA_DIR / 'compte.session'
+    session_env = os.getenv('TELEGRAM_SESSION_GZ_B64')
+    if session_env and not session_path.exists():
+        import base64, gzip
+        session_path.write_bytes(gzip.decompress(base64.b64decode(session_env)))
+        print('Bootstrap : compte.session écrit depuis l\'environnement.', flush=True)
+    authenticator = Auth.from_file(account_path)
     if not os.getenv('TELEGRAM_API_ID') or not os.getenv('TELEGRAM_API_HASH'):
         raise SystemExit('Remplis TELEGRAM_API_ID et TELEGRAM_API_HASH dans .env.')
     provider = os.getenv('AI_PROVIDER', 'ollama')
