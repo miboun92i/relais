@@ -150,7 +150,7 @@ class TeaserStore:
             try:
                 path.unlink()
             except OSError as err:
-                logger.warning('Suppression fichier teaser %s: %s', path, err)
+                logger.warning('Suppression fichier teaser %s : %s', path, err)
         return True
 
 def make_app(engine, authenticator, origins, is_connected, provider, teasers=None):
@@ -173,12 +173,12 @@ def make_app(engine, authenticator, origins, is_connected, provider, teasers=Non
         try:
             response = await handler(request)
         except ValueError as error:
-            logger.exception('Panel : %s: %s', type(error).__name__, error)
+            logger.exception('Panel : %s : %s', type(error).__name__, error)
             response = web.json_response({'error': str(error)}, status=400)
         except web.HTTPException as error:
             response = web.json_response({'error': error.reason}, status=error.status)
         except Exception as error:
-            logger.exception('Panel : %s: %s', type(error).__name__, error)
+            logger.exception('Panel : %s : %s', type(error).__name__, error)
             response = web.json_response({'error': 'La demande a échoué. Vérifiez Telegram et le fournisseur IA. Pour un envoi, vérifiez Telegram avant de réessayer.'}, status=503)
         response.headers.update(headers)
         return response
@@ -403,7 +403,7 @@ async def main():
         port = int(os.getenv('PORT', '8787'))
     except ValueError:
         raise SystemExit('Les identifiants Telegram et le port doivent être des nombres.')
-    origins = {s.strip().rstrip('/') for s in os.getenv('PANEL_ORIGINS', '').split(',') if x.strip()}
+    origins = {s.strip().rstrip('/') for s in os.getenv('PANEL_ORIGINS', '').split(',') if s.strip()}
     if not origins or '*' in origins:
         raise SystemExit('Renseigne PANEL_ORIGINS avec l’adresse exacte du panel, sans chemin.')
     store = Store(DATA_DIR / 'conversations.sqlite3')
