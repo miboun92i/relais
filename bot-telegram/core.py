@@ -1,1 +1,1 @@
-@/tmp/core-payment-fix.py
+test
