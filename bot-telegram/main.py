@@ -259,7 +259,7 @@ async def main():
         print('Telegram : accusé de lecture accepté.', flush=True)
 
     async def simulate_typing(chat_id, text):
-        duration = max(1.2, min((1.0 + len(text.strip()) / 35) * random.uniform(0.80, 1.25), 7.5))
+        duration = max(1.8, min((1.2 + len(text.strip()) / 9) * random.uniform(0.90, 1.15), 12.0))
         peer = await client.get_input_entity(chat_id)
         # Attendre la requête directement : les erreurs doivent remonter au moteur.
         try:
@@ -281,7 +281,7 @@ async def main():
         simulate_typing=simulate_typing,
     )
     print(f'Code chargé : main={Path(__file__).resolve()} ; core={Path(__import__("core").__file__).resolve()}', flush=True)
-    print('Comportements actifs : lecture Telegram → génération → écrit… (1,2–7,5 s) → réponse ; attente initiale aléatoire 1,8–3,8 s.', flush=True)
+    print('Comportements actifs : lecture Telegram → génération → écrit… (1,8–12 s selon longueur) → réponse ; attente initiale aléatoire 1,8–3,8 s.', flush=True)
     runner = None
     try:
         await client.start()
