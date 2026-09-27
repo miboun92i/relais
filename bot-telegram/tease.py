@@ -21,17 +21,17 @@ def needs_payment_handoff(text):
 
 def needs_human_output(text):
     value = normalized(text)
-    return '[relais_humain]' in value or bool(re.search(r"\\b(?:je suis|i am|i'm) (?:un |une |a |an )?(?:ia|bot|robot|assistant)\\b", value))
+    return '[relais_humain]' in value or bool(re.search(r"\b(?:je suis|i am|i'm) (?:un |une |a |an )?(?:ia|bot|robot|assistant)\b", value))
 
 def wants_teaser(text):
     value = normalized(text or '')
     if not value.strip():
         return False
     patterns = [
-        r"avant[- ]?gouts?", r"\\btease\\b", r"\\bteaser\\b", r"\\bpreview\\b", r"\\bapercu\\b",
+        r"avant[- ]?gouts?", r"\btease\b", r"\bteaser\b", r"\bpreview\b", r"\bapercu\b",
         r"montre[- ]?(?:moi )?(?:un peu|qqch|quelque chose|un truc|une? (?:photo|video|image))?",
         r"envoie[- ]?(?:moi )?(?:un |une |le |la )?(?:tease|apercu|avant|photo|video|image)?",
-        r"\\b(?:une?|des)?\\s*photos?\\b", r"\\b(?:une?|des)?\\s*videos?\\b", r"\\bpic(?:s)?\\b",
+        r"\b(?:une?|des)?\s*photos?\b", r"\b(?:une?|des)?\s*videos?\b", r"\bpic(?:s)?\b",
     ]
     if any(re.search(p, value) for p in patterns):
         return True
@@ -62,17 +62,25 @@ def client_wants_teaser(store, chat_id, latest_client=None):
     return False
 
 def tease_delivered(store, chat_id):
+    return teasers_sent_count(store, chat_id) > 0
+
+def teasers_sent_count(store, chat_id):
+    n = 0
     for m in store.messages(chat_id, 80):
         if m.get('source') != 'ai':
             continue
         value = normalized(m.get('text') or '')
         if 'video avant-gout' in value or 'video avant gout' in value or '[video avant-gout]' in value:
-            return True
-        if 'avant-gout' in value and 'video' in value:
-            return True
-    return False
+            n += 1
+        elif 'avant-gout' in value and 'video' in value:
+            n += 1
+    return n
 
-def pick_teaser(active):
-    if not active:
+def ordered_teasers(active):
+    return sorted(active or [], key=lambda t: (0 if t.get('primary') or t.get('featured') else 1, float(t.get('created') or 0), str(t.get('id') or '')))
+
+def pick_teaser(active, index=0):
+    ordered = ordered_teasers(active)
+    if not ordered or index < 0 or index >= len(ordered):
         return None
-    return sorted(active, key=lambda t: (0 if t.get('primary') or t.get('featured') else 1, float(t.get('created') or 0), str(t.get('id') or '')))[0]
+    return ordered[index]
