@@ -1,7 +1,7 @@
 """Envoi des reponses auto: lu -> pause -> typing -> send."""
 import asyncio, logging, random
 from style import smash_style, HANDOFF_FALLBACKS, HumanHandoffRequired, DailyLimitReached
-from tease import client_wants_teaser, tease_delivered, pick_teaser
+from tease import client_wants_teaser, teasers_sent_count, pick_teaser
 logger = logging.getLogger(__name__)
 
 class AutoReplyMixin:
@@ -44,17 +44,15 @@ class AutoReplyMixin:
                             latest_client = m['text']
                             break
                     chat = self.store.chat(chat_id) or {}
-                    if chat.get('tease_sent') and not tease_delivered(self.store, chat_id):
-                        self.store.clear_tease_sent(chat_id)
-                        chat = self.store.chat(chat_id) or {}
+                    sent = max(int(chat.get('tease_sent') or 0), teasers_sent_count(self.store, chat_id))
                     active = []
                     if self.get_active_teasers:
                         try:
                             active = list(self.get_active_teasers() or [])
                         except Exception as error:
                             logger.exception('Teasers ; conversation %s : %s', chat_id, type(error).__name__)
-                    if latest_client and client_wants_teaser(self.store, chat_id, latest_client) and not chat.get('tease_sent') and active and self.send_media:
-                        teaser = pick_teaser(active)
+                    if latest_client and client_wants_teaser(self.store, chat_id, latest_client) and sent < len(active) and self.send_media:
+                        teaser = pick_teaser(active, sent)
                         path = (teaser.get('path') or teaser.get('filepath')) if teaser else None
                         if path:
                             try:
