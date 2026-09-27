@@ -85,7 +85,7 @@ class Store:
         self.db.execute("UPDATE requests SET status='sent',message_id=? WHERE id=?", (message_id, request_id))
         self.db.commit()
     def mark_tease_sent(self, chat_id):
-        self.db.execute('UPDATE chats SET tease_sent=1 WHERE id=?', (chat_id,))
+        self.db.execute('UPDATE chats SET tease_sent=tease_sent+1 WHERE id=?', (chat_id,))
         self.db.commit()
     def clear_tease_sent(self, chat_id):
         self.db.execute('UPDATE chats SET tease_sent=0 WHERE id=?', (chat_id,))
