@@ -6,7 +6,7 @@ from style import (
 )
 from tease import (
     apply_glossary, needs_payment_handoff, needs_human_output,
-    client_wants_teaser, tease_delivered, pick_teaser,
+    client_wants_teaser, teasers_sent_count, pick_teaser,
 )
 from engine_reply import AutoReplyMixin
 logger = logging.getLogger(__name__)
@@ -99,19 +99,19 @@ class Engine(AutoReplyMixin):
                     break
             if latest_client and client_wants_teaser(self.store, chat_id, latest_client):
                 chat = self.store.chat(chat_id) or {}
-                if chat.get('tease_sent') and not tease_delivered(self.store, chat_id):
-                    self.store.clear_tease_sent(chat_id)
-                    chat = self.store.chat(chat_id) or {}
+                sent = max(int(chat.get('tease_sent') or 0), teasers_sent_count(self.store, chat_id))
                 active = []
                 if self.get_active_teasers:
                     try:
-                        active = self.get_active_teasers() or []
+                        active = list(self.get_active_teasers() or [])
                     except Exception:
                         active = []
-                if chat.get('tease_sent'):
-                    teaser_note = '\nCONTEXTE AVANT-GOUT\nvideo deja envoyee. oriente paiement.\n'
-                elif not active:
+                if not active:
                     teaser_note = '\nCONTEXTE AVANT-GOUT\npas de video. tease verbal court.\n'
+                elif sent >= len(active):
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\ntoutes les videos du panel sont parties. refuse un tease de plus. oriente choix et paiement.\n'
+                elif sent > 0:
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\nune autre video du panel peut partir. texte tres court.\n'
                 else:
                     teaser_note = '\nCONTEXTE AVANT-GOUT\nune video peut partir. texte tres court.\n'
             prompt = BASE_PROMPT + teaser_note + '\nTON\n' + settings['tone'] + '\nPRESTATIONS\n' + settings['catalog'] + '\nFAQ\n' + settings['faq']
