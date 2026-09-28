@@ -36,6 +36,8 @@ class Engine(AutoReplyMixin):
         simulate_typing=None,
         delay_min=1.0,
         delay_max=2.0,
+        read_delay_min=3.0,
+        read_delay_max=8.0,
         *,
         delay=None,
         retry_delays=(5, 15),
@@ -53,8 +55,11 @@ class Engine(AutoReplyMixin):
         self.cancel_typing = cancel_typing
         self.send_media = send_media
         self.get_active_teasers = get_active_teasers
+        # delay=0 (tests) annule aussi la pause avant lecture
         self.delay_min = delay_min if delay is None else delay
         self.delay_max = delay_max if delay is None else delay
+        self.read_delay_min = read_delay_min if delay is None else delay
+        self.read_delay_max = read_delay_max if delay is None else delay
         self.epoch = 0
         self.locks, self.tasks = {}, set()
         self.capacity = asyncio.Semaphore(2)

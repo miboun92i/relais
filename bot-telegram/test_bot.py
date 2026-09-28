@@ -69,15 +69,20 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.simulate_typing = None
         self.engine.generate = generate
         self.engine.transport = send
+        self.engine.read_delay_min, self.engine.read_delay_max = 3.0, 8.0
         self.engine.delay_min, self.engine.delay_max = 1.0, 2.0
+        sleeps = []
         async def sleep(seconds):
-            self.assertAlmostEqual(seconds, 1.5, places=5)
-            order.append('delay')
-        with patch('engine_reply.random.uniform', return_value=1.5) as uniform, patch('engine_reply.asyncio.sleep', side_effect=sleep):
+            sleeps.append(seconds)
+            order.append('delay_read' if len(sleeps) == 1 else 'delay')
+        with patch('engine_reply.random.uniform', side_effect=[5.0, 1.5]) as uniform, patch('engine_reply.asyncio.sleep', side_effect=sleep):
             await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
-        uniform.assert_called_once_with(1.0, 2.0)
-        self.assertEqual(order[:4], ['read', 'delay', 'typing', 'generate'])
+        self.assertEqual(uniform.call_args_list[0].args, (3.0, 8.0))
+        self.assertEqual(uniform.call_args_list[1].args, (1.0, 2.0))
+        self.assertEqual(sleeps, [5.0, 1.5])
+        self.assertEqual(order[:5], ['delay_read', 'read', 'delay', 'typing', 'generate'])
         self.assertIn('send', order)
+        self.assertLess(order.index('delay_read'), order.index('read'))
         self.assertLess(order.index('read'), order.index('delay'))
         self.assertLess(order.index('delay'), order.index('typing'))
         self.assertLess(order.index('typing'), order.index('generate'))

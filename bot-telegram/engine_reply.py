@@ -1,4 +1,4 @@
-"""Envoi des reponses auto: lu -> court delai -> typing (pendant draft) -> send."""
+"""Envoi des reponses auto: pause -> lu -> pause -> typing (pendant draft) -> send."""
 import asyncio, logging, random
 from style import smash_style, HANDOFF_FALLBACKS, HumanHandoffRequired, DailyLimitReached, pick_fallback, sanitize_reply, looks_like_tease_offer, POST_TEASE_FALLBACKS
 from tease import client_wants_teaser, teasers_sent_count, pick_teaser
@@ -34,20 +34,26 @@ class AutoReplyMixin:
         typing_stop = asyncio.Event()
         typing_task = None
         try:
-            # 1) Marquer lu TOT, avant tout draft long
+            # 1) Attendre 3–8 s avant d'ouvrir / marquer lu (humain)
+            wait_read = random.uniform(self.read_delay_min, self.read_delay_max)
+            print(f'Reponse automatique : pause avant lecture {wait_read:.1f} s.', flush=True)
+            await asyncio.sleep(wait_read)
+            if not self.valid(chat_id, revision, epoch):
+                return
+            # 2) Marquer lu
             if self.mark_read:
                 try:
                     await self.mark_read(chat_id)
                     print('Telegram : message marque lu avant reponse.', flush=True)
                 except Exception as error:
                     logger.exception('Lecture Telegram ; conversation %s : %s', chat_id, type(error).__name__)
-            # 2) Court delai humain avant d'afficher "écrit…"
+            # 3) 1–2 s apres le lu, puis "écrit…"
             wait = random.uniform(self.delay_min, self.delay_max)
             print(f'Reponse automatique : pause avant saisie {wait:.1f} s.', flush=True)
             await asyncio.sleep(wait)
             if not self.valid(chat_id, revision, epoch):
                 return
-            # 3) Demarrer typing rapidement (1er pulse sync), puis generer en parallele
+            # 4) Demarrer typing (1er pulse sync), puis generer en parallele
             if getattr(self, 'typing_pulse', None):
                 try:
                     await self.typing_pulse(chat_id)
