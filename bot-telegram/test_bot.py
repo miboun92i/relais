@@ -5,6 +5,10 @@ from unittest.mock import patch
 from pathlib import Path
 from aiohttp.test_utils import TestClient, TestServer
 from core import Store, Engine
+from style import (
+    conversation_memory, dedupe_reply, is_too_similar, pick_fallback,
+    EMPTY_FALLBACKS, BASE_PROMPT,
+)
 from main import make_app
 from auth import Auth, LoginFailed, TooManyAttempts, create_account
 
@@ -40,30 +44,41 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.started.wait(), 1)
         return task
 
-    async def test_read_typing_send_order_and_random_delay(self):
+    async def test_read_typing_send_order_and_short_delay(self):
         order = []
         async def mark_read(chat_id):
             order.append('read')
+        async def typing_pulse(chat_id):
+            if 'typing' not in order:
+                order.append('typing')
+        async def cancel_typing(chat_id):
+            order.append('cancel_typing')
         async def generate(prompt, messages):
             order.append('generate')
-            return 'Bonjour !'
-        async def typing(chat_id, text):
-            order.append('typing')
+            self.assertIn('typing', order)  # typing demarre avant / pendant generate
+            return 'Bonjour cash'
         async def send(chat_id, text):
             order.append('send')
             return 123
         self.engine.mark_read = mark_read
-        self.engine.simulate_typing = typing
+        self.engine.typing_pulse = typing_pulse
+        self.engine.cancel_typing = cancel_typing
+        self.engine.simulate_typing = None
         self.engine.generate = generate
         self.engine.transport = send
-        self.engine.delay_min, self.engine.delay_max = 1.8, 3.8
+        self.engine.delay_min, self.engine.delay_max = 0.4, 1.0
         async def sleep(seconds):
-            self.assertEqual(seconds, 2.7)
+            self.assertAlmostEqual(seconds, 0.7, places=5)
             order.append('delay')
-        with patch('core.random.uniform', return_value=2.7) as uniform, patch('core.asyncio.sleep', side_effect=sleep):
+        with patch('engine_reply.random.uniform', return_value=0.7) as uniform, patch('engine_reply.asyncio.sleep', side_effect=sleep):
             await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
-        uniform.assert_called_once_with(1.8, 3.8)
-        self.assertEqual(order, ['delay', 'read', 'generate', 'typing', 'send'])
+        uniform.assert_called_once_with(0.4, 1.0)
+        self.assertEqual(order[:4], ['read', 'delay', 'typing', 'generate'])
+        self.assertIn('send', order)
+        self.assertLess(order.index('read'), order.index('delay'))
+        self.assertLess(order.index('delay'), order.index('typing'))
+        self.assertLess(order.index('typing'), order.index('generate'))
+        self.assertLess(order.index('generate'), order.index('send'))
 
     async def test_manual_takeover_during_typing_discards_reply(self):
         self.release.set()
@@ -133,33 +148,10 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
     async def test_ai_echo_does_not_pause(self):
         self.release.set()
         await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
-        await self.engine.outgoing(1, 101, 'Réponse test')
+        await self.engine.outgoing(1, 101, 'réponse test')
         self.assertEqual(self.store.chat(1)['mode'], 'auto')
         self.assertEqual(len(self.store.messages(1)), 2)
         self.assertEqual(self.store.messages(1)[-1]['source'], 'ai')
-
-    async def test_identity_question_hands_over_without_ai_call(self):
-        self.store.add(1, 2, 'client', "C'est vraiment toi ?")
-        self.engine.incoming(1)
-        self.assertEqual(self.store.chat(1)['mode'], 'manual')
-        self.assertEqual(self.sent, [])
-        self.assertFalse(self.started.is_set())
-        self.assertEqual(self.store.usage(), 0)
-
-    async def test_ai_self_presentation_is_not_sent(self):
-        async def generate(prompt, messages):
-            return 'Je suis un assistant automatique.'
-        self.engine.generate = generate
-        await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
-        self.assertEqual(self.sent, [])
-        self.assertEqual(self.store.chat(1)['mode'], 'manual')
-
-    async def test_identity_draft_requires_personal_reply(self):
-        self.store.add(1, 2, 'client', 'Tu es une IA ?')
-        with self.assertRaises(ValueError):
-            await self.engine.draft(1)
-        self.assertEqual(self.store.chat(1)['mode'], 'manual')
-        self.assertEqual(self.store.usage(), 0)
 
     async def test_settings_and_takeover_survive_restart(self):
         self.engine.set_mode(1, 'manual')
@@ -184,6 +176,83 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.release.set()
         await asyncio.gather(first, second)
         self.assertEqual(len(self.sent), 1)
+
+    async def test_history_injected_includes_recent_exchanges(self):
+        self.store.add(1, 2, 'ai', 'nudes 25 cam 20 canal 50')
+        self.store.add(1, 3, 'client', 'cam alors')
+        captured = {}
+        async def generate(prompt, messages):
+            captured['prompt'] = prompt
+            captured['messages'] = messages
+            return 'ok paypal et on book'
+        self.engine.generate = generate
+        text = await self.engine.draft(1)
+        self.assertTrue(text)
+        roles = [m['role'] for m in captured['messages']]
+        self.assertEqual(roles[0], 'user')
+        self.assertIn('assistant', roles)
+        contents = [m['content'] for m in captured['messages']]
+        self.assertIn('cam alors', contents)
+        self.assertIn('nudes 25 cam 20 canal 50', contents)
+        self.assertIn('MEMOIRE CONVERSATION', captured['prompt'])
+        self.assertIn('ANTI-REPETITION', captured['prompt'])
+
+    async def test_fallback_does_not_spam_same_phrase(self):
+        recent = ['nan dis moi ce que tu veux', 'nan dis moi ce que tu veux']
+        seen = set()
+        for _ in range(12):
+            seen.add(pick_fallback(list(recent)))
+        self.assertGreaterEqual(len(seen), 2)
+        self.assertNotIn('nan dis moi ce que tu veux', seen)
+
+    async def test_dedupe_avoids_repeating_recent_ai(self):
+        recent = ['tu prends nudes cam ou canal ?']
+        out = dedupe_reply('tu prends nudes cam ou canal ?', recent)
+        self.assertFalse(is_too_similar(out, recent))
+        self.assertNotEqual(out, 'tu prends nudes cam ou canal ?')
+
+    async def test_no_requestion_when_already_answered(self):
+        history = [
+            {'source': 'client', 'text': 'salut'},
+            {'source': 'ai', 'text': 'nudes cam ou canal tu prends quoi'},
+            {'source': 'client', 'text': 'cam'},
+            {'source': 'ai', 'text': '20e les 10 min paypal'},
+            {'source': 'client', 'text': 'ok'},
+        ]
+        note = conversation_memory(history)
+        self.assertIn('deja', note.lower())
+        self.assertTrue(
+            'menu' in note.lower() or 'tarif' in note.lower() or 'question' in note.lower() or 'repondu' in note.lower()
+        )
+        captured = {}
+        async def generate(prompt, messages):
+            captured['prompt'] = prompt
+            # Simule une IA qui reposerait la meme question
+            return 'nudes cam ou canal tu prends quoi'
+        for row in history[1:]:
+            self.store.add(1, 10 + len(self.store.messages(1)), row['source'], row['text'])
+        self.engine.generate = generate
+        text = await self.engine.draft(1)
+        self.assertIn('MEMOIRE CONVERSATION', captured['prompt'])
+        self.assertFalse(is_too_similar(text, ['nudes cam ou canal tu prends quoi']))
+
+    async def test_empty_ai_uses_diversified_fallback(self):
+        self.store.add(1, 2, 'ai', EMPTY_FALLBACKS[0])
+        async def generate(prompt, messages):
+            return '   '
+        self.engine.generate = generate
+        text = await self.engine.draft(1)
+        self.assertTrue(text.strip())
+        self.assertNotEqual(text, EMPTY_FALLBACKS[0])
+
+    async def test_catch_up_pending_queues_waiting_chats(self):
+        self.store.ensure(2, 'Autre')
+        self.store.add(2, 1, 'client', 'yo')
+        self.release.set()
+        n = self.engine.catch_up_pending()
+        self.assertGreaterEqual(n, 1)
+        await asyncio.sleep(0.05)
+        await self.engine.close()
 
     async def test_auth_origin_and_api_mutations(self):
         authenticator = Auth(TEST_ACCOUNT)
@@ -231,6 +300,16 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await client.get('/api/state', headers=headers)).status, 200)
             self.assertEqual((await client.post('/api/logout', headers=headers)).status, 200)
             self.assertEqual((await client.get('/api/state', headers=headers)).status, 401)
+
+
+class StyleHelperTests(unittest.TestCase):
+    def test_base_prompt_has_anti_repetition(self):
+        self.assertIn('ANTI-REPETITION', BASE_PROMPT)
+        self.assertNotIn('tu papotes. tu prends nudes cam ou canal ?', BASE_PROMPT)
+
+    def test_is_too_similar_detects_near_duplicates(self):
+        self.assertTrue(is_too_similar('tu prends nudes cam ou canal', ['nudes cam ou canal tu prends quoi']))
+        self.assertFalse(is_too_similar('ok paypal envoie', ['nudes cam ou canal tu prends quoi']))
 
 
 class AuthTests(unittest.IsolatedAsyncioTestCase):

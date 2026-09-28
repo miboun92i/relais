@@ -579,16 +579,25 @@ async def main():
         print(f'Telegram : accusé de lecture accepté (max_id={max_id}).', flush=True)
 
 
-    async def simulate_typing(chat_id, text):
-        duration = max(1.8, min((1.2 + len(text.strip()) / 9) * random.uniform(0.90, 1.15), 12.0))
+    async def typing_pulse(chat_id):
         peer = await client.get_input_entity(chat_id)
-        # Attendre la requête directement : les erreurs doivent remonter au moteur.
+        await client(functions.messages.SetTypingRequest(peer, types.SendMessageTypingAction()))
+        print('Telegram : indicateur écrit… (pulse).', flush=True)
+
+    async def cancel_typing(chat_id):
+        peer = await client.get_input_entity(chat_id)
+        await client(functions.messages.SetTypingRequest(peer, types.SendMessageCancelAction()))
+
+    async def simulate_typing(chat_id, text):
+        # Court typage post-draft: le keepalive a deja affiche "écrit…" pendant la generation.
+        duration = max(0.35, min((0.25 + len((text or '').strip()) / 18) * random.uniform(0.85, 1.1), 2.2))
+        peer = await client.get_input_entity(chat_id)
         try:
             remaining = duration
             while remaining > 0:
                 await client(functions.messages.SetTypingRequest(peer, types.SendMessageTypingAction()))
                 print(f'Telegram : saisie acceptée ; délai restant {remaining:.1f} s.', flush=True)
-                step = min(remaining, 4.0)
+                step = min(remaining, 1.5)
                 await asyncio.sleep(step)
                 remaining -= step
         finally:
@@ -600,11 +609,13 @@ async def main():
         generate,
         mark_read=mark_read,
         simulate_typing=simulate_typing,
+        typing_pulse=typing_pulse,
+        cancel_typing=cancel_typing,
         send_media=send_media,
         get_active_teasers=teasers.active_with_paths,
     )
     print(f'Code chargé : main={Path(__file__).resolve()} ; core={Path(__import__("core").__file__).resolve()}', flush=True)
-    print('Comportements actifs : lecture Telegram → génération → écrit… (1,8–12 s selon longueur) → réponse ; attente initiale aléatoire 1,8–3,8 s.', flush=True)
+    print('Comportements actifs : lu → pause 0,4–1,2 s → écrit… pendant génération → micro-typage → réponse.', flush=True)
     runner = None
     try:
         await client.start()

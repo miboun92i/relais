@@ -1,35 +1,83 @@
-"""Envoi des reponses auto: lu -> pause -> typing -> send."""
+"""Envoi des reponses auto: lu -> court delai -> typing (pendant draft) -> send."""
 import asyncio, logging, random
-from style import smash_style, HANDOFF_FALLBACKS, HumanHandoffRequired, DailyLimitReached
+from style import smash_style, HANDOFF_FALLBACKS, HumanHandoffRequired, DailyLimitReached, pick_fallback
 from tease import client_wants_teaser, teasers_sent_count, pick_teaser
 logger = logging.getLogger(__name__)
 
 class AutoReplyMixin:
+    async def _typing_keepalive(self, chat_id, stop_event):
+        """Affiche 'écrit…' rapidement et le maintient pendant la generation."""
+        pulse = getattr(self, 'typing_pulse', None)
+        cancel = getattr(self, 'cancel_typing', None)
+        if not pulse:
+            return
+        try:
+            while not stop_event.is_set():
+                try:
+                    await pulse(chat_id)
+                except Exception as error:
+                    logger.exception('Saisie Telegram ; conversation %s : %s', chat_id, type(error).__name__)
+                    return
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            if cancel:
+                try:
+                    await cancel(chat_id)
+                except Exception:
+                    pass
+
     async def auto_reply(self, chat_id, revision, epoch):
         delivery_uncertain = False
+        typing_stop = asyncio.Event()
+        typing_task = None
         try:
+            # 1) Marquer lu TOT, avant tout draft long
             if self.mark_read:
                 try:
                     await self.mark_read(chat_id)
                     print('Telegram : message marque lu avant reponse.', flush=True)
                 except Exception as error:
                     logger.exception('Lecture Telegram ; conversation %s : %s', chat_id, type(error).__name__)
+            # 2) Court delai humain avant d'afficher "écrit…"
             wait = random.uniform(self.delay_min, self.delay_max)
-            print(f'Reponse automatique : lecture {wait:.1f} s.', flush=True)
+            print(f'Reponse automatique : pause avant saisie {wait:.1f} s.', flush=True)
             await asyncio.sleep(wait)
             if not self.valid(chat_id, revision, epoch):
                 return
+            # 3) Demarrer typing rapidement (1er pulse sync), puis generer en parallele
+            if getattr(self, 'typing_pulse', None):
+                try:
+                    await self.typing_pulse(chat_id)
+                except Exception as error:
+                    logger.exception('Saisie Telegram ; conversation %s : %s', chat_id, type(error).__name__)
+                typing_task = asyncio.create_task(self._typing_keepalive(chat_id, typing_stop))
             handoff = None
             try:
                 reply = await self.automatic_draft(chat_id, revision, epoch)
             except HumanHandoffRequired as error:
                 handoff = str(error)
-                reply = smash_style(random.choice(HANDOFF_FALLBACKS))
+                recent = [m['text'] for m in self.store.messages(chat_id, 8) if m.get('source') == 'ai']
+                reply = smash_style(pick_fallback(recent, HANDOFF_FALLBACKS))
+            finally:
+                typing_stop.set()
+                if typing_task:
+                    try:
+                        await asyncio.wait_for(typing_task, timeout=2.0)
+                    except Exception:
+                        typing_task.cancel()
+                        try:
+                            await typing_task
+                        except Exception:
+                            pass
             if reply is None or not self.valid(chat_id, revision, epoch):
                 return
             async with self.lock(chat_id):
                 if not self.valid(chat_id, revision, epoch):
                     return
+                # Micro-typage post-draft (court) pour coller a la longueur, sans longue attente
                 if self.simulate_typing:
                     try:
                         await self.simulate_typing(chat_id, reply)
@@ -77,6 +125,9 @@ class AutoReplyMixin:
                 if not handoff:
                     self.errors.pop(chat_id, None)
         except asyncio.CancelledError:
+            typing_stop.set()
+            if typing_task:
+                typing_task.cancel()
             raise
         except HumanHandoffRequired as error:
             self.report_error(chat_id, str(error))
@@ -86,12 +137,14 @@ class AutoReplyMixin:
             if self.valid(chat_id, revision, epoch) and not delivery_uncertain:
                 self.report_error(chat_id, 'Reponse automatique echouee (' + type(error).__name__ + ').')
             logger.exception('Reponse automatique ; conversation %s : %s', chat_id, type(error).__name__)
+
     async def outgoing(self, chat_id, message_id, text, created=None):
         async with self.lock(chat_id):
             if self.store.known(chat_id, message_id):
                 return
             self.set_mode(chat_id, 'manual')
             self.store.add(chat_id, message_id, 'human', text, created)
+
     async def reply(self, chat_id, text, request_id):
         self.set_mode(chat_id, 'manual')
         async with self.lock(chat_id):
@@ -104,6 +157,7 @@ class AutoReplyMixin:
             self.store.add(chat_id, message_id, 'human', text)
             self.store.finish_request(request_id, message_id)
             return message_id
+
     async def close(self):
         for task in list(self.tasks):
             task.cancel()
