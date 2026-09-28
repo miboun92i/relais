@@ -615,7 +615,7 @@ async def main():
         get_active_teasers=teasers.active_with_paths,
     )
     print(f'Code chargé : main={Path(__file__).resolve()} ; core={Path(__import__("core").__file__).resolve()}', flush=True)
-    print('Comportements actifs : lu → pause 0,4–1,2 s → écrit… pendant génération → micro-typage → réponse.', flush=True)
+    print('Comportements actifs : lu → pause 1–2 s → écrit… pendant génération → micro-typage → réponse.', flush=True)
     runner = None
     try:
         await client.start()

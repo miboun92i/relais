@@ -69,13 +69,13 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.engine.simulate_typing = None
         self.engine.generate = generate
         self.engine.transport = send
-        self.engine.delay_min, self.engine.delay_max = 0.4, 1.0
+        self.engine.delay_min, self.engine.delay_max = 1.0, 2.0
         async def sleep(seconds):
-            self.assertAlmostEqual(seconds, 0.7, places=5)
+            self.assertAlmostEqual(seconds, 1.5, places=5)
             order.append('delay')
-        with patch('engine_reply.random.uniform', return_value=0.7) as uniform, patch('engine_reply.asyncio.sleep', side_effect=sleep):
+        with patch('engine_reply.random.uniform', return_value=1.5) as uniform, patch('engine_reply.asyncio.sleep', side_effect=sleep):
             await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
-        uniform.assert_called_once_with(0.4, 1.0)
+        uniform.assert_called_once_with(1.0, 2.0)
         self.assertEqual(order[:4], ['read', 'delay', 'typing', 'generate'])
         self.assertIn('send', order)
         self.assertLess(order.index('read'), order.index('delay'))
