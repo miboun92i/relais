@@ -169,8 +169,11 @@ def is_too_similar(candidate, recent_texts, *, threshold=0.72):
 def pick_fallback(recent_texts=None, pool=None):
     pool = list(pool or EMPTY_FALLBACKS)
     recent = [normalize_compare(t) for t in (recent_texts or [])]
-    choices = [p for p in pool if normalize_compare(p) not in recent]
-    return random.choice(choices or pool)
+    banned = {normalize_compare(b) for b in globals().get('BANNED_FALLBACKS', ())}
+    choices = [p for p in pool if normalize_compare(p) not in recent and normalize_compare(p) not in banned]
+    if not choices:
+        choices = [p for p in pool if normalize_compare(p) not in banned]
+    return random.choice(choices or ['et donc'])
 
 def looks_like_price(text):
     return bool(re.search(r'\d+\s*(?:€|e(?:uros?)?)\b|\b(?:nudes?|cam|canal)\b.{0,12}\d+', normalize_compare(text)))
@@ -239,9 +242,9 @@ def conversation_memory(messages, *, teaser_sending_now=False):
     return '\nMEMOIRE CONVERSATION\n' + '\n'.join('- ' + n for n in notes) + '\n'
 
 POST_TEASE_FALLBACKS = [
-    'dis moi nudes cam ou canal',
-    'tu book laquelle',
-    'ok tu prends quoi',
+    'tu veux laquelle',
+    'dis juste ce que tu book',
+    'ok tu book quoi',
 ]
 
 AFTER_MENU_FALLBACKS = [
@@ -250,6 +253,21 @@ AFTER_MENU_FALLBACKS = [
     'balance ton choix on avance',
 ]
 
+def is_banned_phrase(text):
+    """True si texte = phrase robot bannie (exacte ou quasi)."""
+    cand = normalize_compare(text)
+    if not cand:
+        return False
+    for banned in BANNED_FALLBACKS:
+        b = normalize_compare(banned)
+        if not b:
+            continue
+        if cand == b or cand in b or b in cand:
+            return True
+        if is_too_similar(text, [banned], threshold=0.85):
+            return True
+    return False
+
 def sanitize_reply(text, messages, *, teaser_sending_now=False):
     """Post-traitement: anti-menu empile, anti-offre tease si video partie."""
     text = smash_style(text or '')
@@ -257,6 +275,9 @@ def sanitize_reply(text, messages, *, teaser_sending_now=False):
         return text
     ai_texts = [m.get('text') or '' for m in (messages or []) if m.get('source') in ('ai', 'human')]
     recent = list(ai_texts)
+
+    if is_banned_phrase(text):
+        text = pick_fallback(recent + list(BANNED_FALLBACKS), EMPTY_FALLBACKS)
 
     tease_done = teaser_already_sent_in(messages) or teaser_sending_now
     if tease_done and looks_like_tease_offer(text):
@@ -282,14 +303,20 @@ def sanitize_reply(text, messages, *, teaser_sending_now=False):
 def dedupe_reply(text, recent_ai, *, max_attempts=5):
     """Evite de renvoyer une phrase deja dite; bascule sur un fallback diversifie."""
     text = smash_style(text or '')
-    if text and not is_too_similar(text, recent_ai):
+    banned_block = list(BANNED_FALLBACKS) + list(recent_ai or [])
+    if text and is_banned_phrase(text):
+        text = pick_fallback(banned_block, EMPTY_FALLBACKS)
+    if text and not is_too_similar(text, recent_ai) and not is_banned_phrase(text):
         return text
     for _ in range(max_attempts):
-        alt = pick_fallback(recent_ai)
+        alt = pick_fallback(banned_block)
+        if is_banned_phrase(alt):
+            continue
         if not is_too_similar(alt, recent_ai + ([text] if text else [])):
             return alt
-        recent_ai = list(recent_ai) + [alt]
-    return pick_fallback(recent_ai)
+        banned_block = list(banned_block) + [alt]
+    alt = pick_fallback(banned_block, EMPTY_FALLBACKS)
+    return alt if not is_banned_phrase(alt) else 'et donc'
 
 DEFAULTS = {'enabled': False, 'tone': 'cash directe closer pas de rp gratuit', 'catalog': '', 'faq': '', 'daily_limit': 100, 'glossary': []}
 BASE_PROMPT = '''Tu parles au nom de ce compte Telegram, a la premiere personne.
@@ -351,11 +378,17 @@ HANDOFF_FALLBACKS = [
     'envoie la preuve si t as pas deja',
 ]
 
-EMPTY_FALLBACKS = [
-    'nan dis moi ce que tu veux',
+# Phrases robot a ne jamais renvoyer (meme si l'IA les invente)
+BANNED_FALLBACKS = [
     'ok sois cash tu veux quoi',
-    'nudes cam ou canal tu prends quoi',
-    'balance ton choix on avance',
-    'tu book laquelle',
-    'ok et pour le paiement',
+    'sois cash tu veux quoi',
+]
+
+EMPTY_FALLBACKS = [
+    'et donc',
+    'tu veux laquelle',
+    'dis juste ce que tu book',
+    'balance ton choix',
+    'ok et ensuite',
+    'tu book quoi',
 ]

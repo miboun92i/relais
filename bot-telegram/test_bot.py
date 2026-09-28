@@ -7,8 +7,9 @@ from aiohttp.test_utils import TestClient, TestServer
 from core import Store, Engine
 from style import (
     conversation_memory, dedupe_reply, is_too_similar, pick_fallback,
-    EMPTY_FALLBACKS, BASE_PROMPT, clip_reply, sanitize_reply,
+    EMPTY_FALLBACKS, BANNED_FALLBACKS, BASE_PROMPT, clip_reply, sanitize_reply,
     looks_like_tease_offer, looks_like_menu_question, looks_like_tariff_dump,
+    is_banned_phrase,
 )
 from main import make_app
 from auth import Auth, LoginFailed, TooManyAttempts, create_account
@@ -199,12 +200,13 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('ANTI-REPETITION', captured['prompt'])
 
     async def test_fallback_does_not_spam_same_phrase(self):
-        recent = ['nan dis moi ce que tu veux', 'nan dis moi ce que tu veux']
+        recent = [EMPTY_FALLBACKS[0], EMPTY_FALLBACKS[0]]
         seen = set()
         for _ in range(12):
             seen.add(pick_fallback(list(recent)))
         self.assertGreaterEqual(len(seen), 2)
-        self.assertNotIn('nan dis moi ce que tu veux', seen)
+        self.assertNotIn(EMPTY_FALLBACKS[0], seen)
+        self.assertNotIn('ok sois cash tu veux quoi', seen)
 
     async def test_dedupe_avoids_repeating_recent_ai(self):
         recent = ['tu prends nudes cam ou canal ?']
@@ -399,6 +401,28 @@ class StyleHelperTests(unittest.TestCase):
         out = sanitize_reply(offer, hist, teaser_sending_now=True)
         self.assertFalse(looks_like_tease_offer(out))
         self.assertTrue(out.strip())
+
+    def test_banned_cash_phrase_removed_from_fallbacks(self):
+        self.assertNotIn('ok sois cash tu veux quoi', EMPTY_FALLBACKS)
+        self.assertNotIn('nudes cam ou canal tu prends quoi', EMPTY_FALLBACKS)
+        joined = ' '.join(EMPTY_FALLBACKS + BANNED_FALLBACKS)
+        self.assertIn('ok sois cash tu veux quoi', joined)  # still listed as banned
+        for phrase in EMPTY_FALLBACKS:
+            self.assertFalse(is_banned_phrase(phrase), phrase)
+
+    def test_sanitize_and_dedupe_never_return_banned_cash(self):
+        banned = 'ok sois cash tu veux quoi'
+        self.assertTrue(is_banned_phrase(banned))
+        out = sanitize_reply(banned, [])
+        self.assertFalse(is_banned_phrase(out))
+        self.assertNotEqual(out, banned)
+        out2 = dedupe_reply(banned, [])
+        self.assertFalse(is_banned_phrase(out2))
+        out3 = dedupe_reply('Ok sois cash tu veux quoi !!!', ['et donc'])
+        self.assertFalse(is_banned_phrase(out3))
+        for _ in range(20):
+            self.assertFalse(is_banned_phrase(pick_fallback([banned])))
+
 
 
 class AuthTests(unittest.IsolatedAsyncioTestCase):
