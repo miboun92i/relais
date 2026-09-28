@@ -12,7 +12,7 @@ from engine_reply import AutoReplyMixin
 logger = logging.getLogger(__name__)
 
 class Engine(AutoReplyMixin):
-    def __init__(self, store, transport, generate, mark_read=None, simulate_typing=None, delay_min=4.5, delay_max=9.0, *, delay=None, retry_delays=(5, 15), send_media=None, get_active_teasers=None):
+    def __init__(self, store, transport, generate, mark_read=None, simulate_typing=None, delay_min=1.5, delay_max=3.0, *, delay=None, retry_delays=(5, 15), send_media=None, get_active_teasers=None):
         self.store = store
         self.transport = transport
         self.generate = generate
