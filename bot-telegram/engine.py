@@ -4,6 +4,7 @@ from style import (
     smash_style, clip_reply, BASE_PROMPT, EMPTY_FALLBACKS,
     temporary_ai_error, HumanHandoffRequired, DailyLimitReached,
     conversation_memory, dedupe_reply, pick_fallback, sanitize_reply,
+    client_asks_payment, client_chose_presta, payment_reply, fix_paypal_doublon,
 )
 from tease import (
     apply_glossary, needs_payment_handoff, needs_human_output,
@@ -201,6 +202,11 @@ class Engine(AutoReplyMixin):
                 messages.pop(0)
             if not messages:
                 raise ValueError('Aucun message client a traiter.')
+            catalog = settings.get('catalog') or ''
+            faq = settings.get('faq') or ''
+            # Demande paiement explicite: forcer le lien (pas d'IA / pas de closer)
+            if latest_client and client_asks_payment(latest_client):
+                return smash_style(fix_paypal_doublon(payment_reply(catalog, faq, history)))[:4000]
             _safe_prompt_debug(prompt, messages)
             try:
                 text = (await asyncio.wait_for(self.generate(prompt, messages), timeout=60)).strip()
@@ -214,13 +220,21 @@ class Engine(AutoReplyMixin):
                 raise HumanHandoffRequired('IA refusee.') from error
             recent_ai = [m['text'] for m in history if m.get('source') == 'ai']
             if not text:
-                text = pick_fallback(recent_ai, EMPTY_FALLBACKS)
+                if client_chose_presta(history):
+                    text = payment_reply(catalog, faq, history)
+                else:
+                    text = pick_fallback(recent_ai, EMPTY_FALLBACKS)
             if needs_human_output(text):
                 if '[relais_humain]' in text.lower().replace(' ', ''):
                     self.set_mode(chat_id, 'manual')
                     raise HumanHandoffRequired('Le client dit avoir paye ou envoie une preuve. Reprenez pour encaisser.')
                 text = text.replace('[RELAIS_HUMAIN]', '').replace('[relais_humain]', '').strip() or pick_fallback(recent_ai)
             text = smash_style(clip_reply(text, max_words=14, soft_max=22))
-            text = sanitize_reply(text, history, teaser_sending_now=teaser_sending_now)
-            text = dedupe_reply(text, recent_ai)
-            return smash_style(text)[:4000]
+            text = sanitize_reply(
+                text, history,
+                teaser_sending_now=teaser_sending_now,
+                catalog=catalog,
+                faq=faq,
+            )
+            text = dedupe_reply(text, recent_ai, messages=history, catalog=catalog, faq=faq)
+            return smash_style(fix_paypal_doublon(text))[:4000]

@@ -9,7 +9,8 @@ from style import (
     conversation_memory, dedupe_reply, is_too_similar, pick_fallback,
     EMPTY_FALLBACKS, BANNED_FALLBACKS, BASE_PROMPT, clip_reply, sanitize_reply,
     looks_like_tease_offer, looks_like_menu_question, looks_like_tariff_dump,
-    is_banned_phrase,
+    is_banned_phrase, client_asks_payment, client_chose_presta, payment_reply,
+    fix_paypal_doublon, looks_like_choice_closer,
 )
 from main import make_app
 from auth import Auth, LoginFailed, TooManyAttempts, create_account
@@ -262,6 +263,38 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         text = await self.engine.draft(1)
         self.assertFalse(looks_like_tease_offer(text))
 
+
+    async def test_draft_jenvoi_ou_returns_paypal_not_closer(self):
+        self.store.save_settings({
+            **self.store.settings(),
+            'enabled': True,
+            'catalog': 'cam 50e nudes 25e PayPal paypal.me/offlexa',
+        })
+        self.store.add(1, 2, 'client', 'cam a 50 euro')
+        self.store.add(1, 3, 'client', 'jenvoi ou')
+        async def generate(prompt, messages):
+            self.fail('IA ne doit pas etre appelee pour une demande de paiement')
+        self.engine.generate = generate
+        text = await self.engine.draft(1)
+        self.assertIn('paypal.me/offlexa', text.lower())
+        self.assertNotIn('tu book', text.lower())
+        self.assertNotIn('balance ton choix', text.lower())
+
+    async def test_draft_chose_cam_replaces_choice_closer(self):
+        self.store.save_settings({
+            **self.store.settings(),
+            'enabled': True,
+            'catalog': 'cam 50e paypal.me/offlexa',
+        })
+        self.store.add(1, 2, 'client', 'cam a 50 euro')
+        self.store.add(1, 3, 'client', 'ok')
+        async def generate(prompt, messages):
+            return 'tu book quoi'
+        self.engine.generate = generate
+        text = await self.engine.draft(1)
+        self.assertIn('paypal.me/offlexa', text.lower())
+        self.assertFalse(looks_like_choice_closer(text))
+
     async def test_auto_reply_after_teaser_not_offer_tease(self):
         order = []
         async def generate(prompt, messages):
@@ -405,6 +438,9 @@ class StyleHelperTests(unittest.TestCase):
     def test_banned_cash_phrase_removed_from_fallbacks(self):
         self.assertNotIn('ok sois cash tu veux quoi', EMPTY_FALLBACKS)
         self.assertNotIn('nudes cam ou canal tu prends quoi', EMPTY_FALLBACKS)
+        self.assertNotIn('balance ton choix', EMPTY_FALLBACKS)
+        self.assertNotIn('et donc', EMPTY_FALLBACKS)
+        self.assertNotIn('dis juste ce que tu book', EMPTY_FALLBACKS)
         joined = ' '.join(EMPTY_FALLBACKS + BANNED_FALLBACKS)
         self.assertIn('ok sois cash tu veux quoi', joined)  # still listed as banned
         for phrase in EMPTY_FALLBACKS:
@@ -422,6 +458,46 @@ class StyleHelperTests(unittest.TestCase):
         self.assertFalse(is_banned_phrase(out3))
         for _ in range(20):
             self.assertFalse(is_banned_phrase(pick_fallback([banned])))
+
+    def test_client_chose_cam_no_reask_choice(self):
+        hist = [
+            {'source': 'client', 'text': 'cam a 50 euro'},
+            {'source': 'ai', 'text': 'ok'},
+            {'source': 'client', 'text': 'cam a 50 euro'},
+        ]
+        self.assertTrue(client_chose_presta(hist))
+        catalog = 'nudes 25 cam 50 canal 50 PayPal paypal.me/offlexa'
+        out = sanitize_reply('tu book quoi', hist, catalog=catalog)
+        self.assertIn('paypal.me/offlexa', out.lower())
+        self.assertFalse(looks_like_choice_closer(out))
+        out2 = sanitize_reply('balance ton choix', hist, catalog=catalog)
+        self.assertIn('paypal.me', out2.lower())
+        out3 = sanitize_reply('dis juste ce que tu book', hist, catalog=catalog)
+        self.assertIn('paypal.me', out3.lower())
+
+    def test_jenvoi_ou_returns_paypal_link(self):
+        self.assertTrue(client_asks_payment('jenvoi ou'))
+        self.assertTrue(client_asks_payment('jenvoi ou les 50 euro'))
+        hist = [
+            {'source': 'client', 'text': 'cam a 50 euro'},
+            {'source': 'client', 'text': 'jenvoi ou les 50 euro'},
+        ]
+        catalog = 'cam 50e paypal.me/offlexa'
+        out = sanitize_reply('et donc', hist, catalog=catalog)
+        self.assertIn('paypal.me/offlexa', out.lower())
+        pay = payment_reply(catalog, '', hist)
+        self.assertIn('paypal.me/offlexa', pay.lower())
+
+    def test_no_paypal_paypal_doublon(self):
+        raw = 'PayPal paypal paypal.me/offlexa'
+        fixed = fix_paypal_doublon(raw)
+        self.assertEqual(fixed, 'PayPal paypal.me/offlexa')
+        self.assertNotIn('PayPal paypal ', fixed + ' ')
+        # smash ne doit pas produire PayPal.me
+        from style import smash_style
+        s = smash_style(raw)
+        self.assertIn('paypal.me/offlexa', s.lower())
+        self.assertNotIn('PayPal.me', s)
 
 
 

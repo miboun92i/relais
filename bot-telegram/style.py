@@ -37,7 +37,26 @@ def smash_style(text):
         masked = masked[0].lower() + masked[1:]
     for i, u in enumerate(urls):
         masked = masked.replace(f'__URL{i}__', u)
-    return masked.strip()
+    return fix_paypal_doublon(masked.strip())
+
+def fix_paypal_doublon(text):
+    """Evite 'PayPal paypal' / 'paypal paypal.me' en double."""
+    if not text:
+        return text
+    # Ne jamais matcher le "paypal" de "paypal.me/..."
+    text = re.sub(
+        r'(?i)\bpaypal\b(?!\.me)(?:\s+\bpaypal\b(?!\.me))+(?=\s*paypal\.me|\s*https?://)',
+        'PayPal',
+        text,
+    )
+    text = re.sub(
+        r'(?i)\bpaypal\b(?!\.me)(?:\s+\bpaypal\b(?!\.me))+(?=\s*$|[\s,;!?])',
+        'PayPal',
+        text,
+    )
+    text = re.sub(r'(?i)\bpaypal\b(?!\.me)\s+(paypal\.me/\S+)', r'PayPal \1', text)
+    text = re.sub(r'(?i)\bpaypal\b(?!\.me)\s+(https?://(?:www\.)?paypal\.me/\S+)', r'PayPal \1', text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 # Mots qui ne peuvent pas terminer une phrase seule (article/preposition/etc.)
 _DANGLING = {
@@ -48,7 +67,6 @@ _DANGLING = {
     'je', 'tu', 'il', 'elle', 'on', 'nous', 'vous', 'ils', 'elles', 'me', 'te',
     'se', 'lui', 'leur', 'leurs', 'son', 'sa', 'ses', 'notre', 'votre', 'vos',
     'ne', 'pas', 'plus', 'tres', 'très', 'tout', 'toute', 'tous', 'toutes',
-    'aux', 'des', 'du', 'les',
 }
 
 def _ends_incomplete(words):
@@ -173,7 +191,7 @@ def pick_fallback(recent_texts=None, pool=None):
     choices = [p for p in pool if normalize_compare(p) not in recent and normalize_compare(p) not in banned]
     if not choices:
         choices = [p for p in pool if normalize_compare(p) not in banned]
-    return random.choice(choices or ['et donc'])
+    return random.choice(choices or ['ok'])
 
 def looks_like_price(text):
     return bool(re.search(r'\d+\s*(?:€|e(?:uros?)?)\b|\b(?:nudes?|cam|canal)\b.{0,12}\d+', normalize_compare(text)))
@@ -200,6 +218,73 @@ def looks_like_tease_offer(text):
         r'|je t envoie.{0,20}(tease|video|photo|apercu)',
         value,
     ))
+
+
+def extract_paypal_link(*parts):
+    blob = ' '.join(str(p or '') for p in parts)
+    m = re.search(r'https?://(?:www\.)?paypal\.me/[^\s<>"\']+', blob, flags=re.I)
+    if m:
+        return m.group(0).rstrip('.,;:!?)')
+    m = re.search(r'paypal\.me/[^\s<>"\']+', blob, flags=re.I)
+    if m:
+        return m.group(0).rstrip('.,;:!?)')
+    return None
+
+def client_chose_presta(messages):
+    """True si le client a clairement choisi nudes/cam/canal (+ prix souvent)."""
+    for m in messages or []:
+        if m.get('source') != 'client':
+            continue
+        value = normalize_compare(m.get('text') or '')
+        if not value:
+            continue
+        if re.search(r'\b(nudes?|cam|canal)\b', value) and re.search(r'\d+', value):
+            return True
+        if re.search(r'(?:je\s+)?(?:prends?|prend|book|veux|pour)\s+(?:les?\s+)?(?:nudes?|cam|canal)\b', value):
+            return True
+        if re.fullmatch(r'(?:les?\s+)?(?:nudes?|cam|canal)', value):
+            return True
+    return False
+
+def client_asks_payment(text):
+    """Demande ou envoyer / comment payer / jenvoi ou / les X euro."""
+    value = normalize_compare(text or '')
+    if not value:
+        return False
+    if re.search(r'\bpaypal\b|lien (?:de )?pai|comment (?:je )?(?:paye|payer|envoie|envoi)', value):
+        return True
+    if re.search(r'\bj?\s*env(?:oi|oie|oyer)\b|\bjenvoi\b|\bjenvoie\b', value):
+        return True
+    if re.search(r'\bou\b.*\b(?:envoyer|envoie|envoi|payer|paye|paypal)\b', value):
+        return True
+    if re.search(r'(?:envoi|envoie|envoyer).{0,20}\bou\b|\bou\b.{0,12}(?:les?\s+)?\d+', value):
+        return True
+    return False
+
+def looks_like_choice_closer(text):
+    value = normalize_compare(text or '')
+    if not value:
+        return False
+    markers = [
+        'tu book quoi', 'tu book laquelle', 'tu veux laquelle', 'tu prends quoi',
+        'dis juste ce que tu book', 'balance ton choix', 'et donc',
+        'ok tu book quoi', 'nudes cam ou canal', 'dis moi ce que tu veux',
+        'sois cash',
+    ]
+    if any(m in value for m in markers):
+        return True
+    if looks_like_menu_question(text) and not extract_paypal_link(text or ''):
+        return True
+    return False
+
+def payment_reply(catalog='', faq='', messages=None):
+    parts = [catalog or '', faq or '']
+    for m in messages or []:
+        parts.append(m.get('text') or '')
+    link = extract_paypal_link(*parts)
+    if link:
+        return fix_paypal_doublon('PayPal ' + link)
+    return 'envoie sur PayPal et dis moi quand c est fait'
 
 def teaser_already_sent_in(messages):
     for m in messages or []:
@@ -233,6 +318,19 @@ def conversation_memory(messages, *, teaser_sending_now=False):
         )
     if any(looks_like_tariff_dump(t) for t in ai_or_human):
         notes.append('resume tarifs deja envoye: une seule grille max. ensuite closer paiement.')
+    chose = client_chose_presta(messages)
+    latest_client = clients[-1] if clients else ''
+    asks_pay = client_asks_payment(latest_client)
+    if chose:
+        notes.append(
+            'CHOIX CLIENT DEJA FAIT (presta+prix). INTERDIT de reposer nudes/cam/canal '
+            'ou "tu book quoi". Prochaine reponse = paiement PayPal (lien PRESTATIONS/FAQ).'
+        )
+    if asks_pay:
+        notes.append(
+            'CLIENT DEMANDE OU ENVOYER / PAYER. Reponds UNIQUEMENT avec le lien PayPal '
+            '(paypal.me depuis PRESTATIONS/FAQ). Aucun closer de choix.'
+        )
     if clients and any(re.search(r'\b(nudes?|cam|canal|paypal|paye|paiement)\b', normalize_compare(c)) for c in clients[-3:]):
         notes.append('le client a deja repondu sur presta/paiement: tiens-en compte.')
     if ai_or_human:
@@ -242,15 +340,15 @@ def conversation_memory(messages, *, teaser_sending_now=False):
     return '\nMEMOIRE CONVERSATION\n' + '\n'.join('- ' + n for n in notes) + '\n'
 
 POST_TEASE_FALLBACKS = [
-    'tu veux laquelle',
-    'dis juste ce que tu book',
-    'ok tu book quoi',
+    'ok tu es chaud',
+    'dis moi',
+    'go',
 ]
 
 AFTER_MENU_FALLBACKS = [
-    'tu book laquelle',
     'ok et pour le paiement',
-    'balance ton choix on avance',
+    'PayPal quand tu veux',
+    'go pour le paiement',
 ]
 
 def is_banned_phrase(text):
@@ -262,47 +360,74 @@ def is_banned_phrase(text):
         b = normalize_compare(banned)
         if not b:
             continue
-        if cand == b or cand in b or b in cand:
+        if cand == b:
             return True
-        if is_too_similar(text, [banned], threshold=0.85):
+        # Sous-chaine seulement si la candidate est assez longue (evite "ok" ⊂ "ok sois cash...")
+        if len(cand) >= max(10, len(b) - 4) and (cand in b or b in cand):
+            return True
+        if len(cand) >= 8 and is_too_similar(text, [banned], threshold=0.85):
             return True
     return False
 
-def sanitize_reply(text, messages, *, teaser_sending_now=False):
-    """Post-traitement: anti-menu empile, anti-offre tease si video partie."""
+def sanitize_reply(text, messages, *, teaser_sending_now=False, catalog='', faq=''):
+    """Post-traitement: paiement si choix clair, anti-menu, anti-offre tease, anti-doublon PayPal."""
     text = smash_style(text or '')
     if not text:
         return text
     ai_texts = [m.get('text') or '' for m in (messages or []) if m.get('source') in ('ai', 'human')]
+    clients = [m.get('text') or '' for m in (messages or []) if m.get('source') == 'client']
+    latest_client = clients[-1] if clients else ''
     recent = list(ai_texts)
+    chose = client_chose_presta(messages)
+    asks_pay = client_asks_payment(latest_client)
+    need_pay = asks_pay or chose
+
+    if asks_pay or (chose and (looks_like_choice_closer(text) or is_banned_phrase(text) or looks_like_menu_question(text))):
+        return smash_style(payment_reply(catalog, faq, messages))
 
     if is_banned_phrase(text):
-        text = pick_fallback(recent + list(BANNED_FALLBACKS), EMPTY_FALLBACKS)
+        if need_pay:
+            text = payment_reply(catalog, faq, messages)
+        else:
+            text = pick_fallback(recent + list(BANNED_FALLBACKS), EMPTY_FALLBACKS)
 
     tease_done = teaser_already_sent_in(messages) or teaser_sending_now
     if tease_done and looks_like_tease_offer(text):
-        text = pick_fallback(recent, POST_TEASE_FALLBACKS)
+        if chose or asks_pay:
+            text = payment_reply(catalog, faq, messages)
+        else:
+            text = pick_fallback(recent, POST_TEASE_FALLBACKS)
 
     menu_already = any(looks_like_menu_question(t) for t in ai_texts)
     tariff_already = any(looks_like_tariff_dump(t) or looks_like_price(t) for t in ai_texts)
 
-    # Menu deja propose: ne pas le reposer
-    if menu_already and looks_like_menu_question(text):
-        text = pick_fallback(recent + [text], AFTER_MENU_FALLBACKS)
+    if chose and looks_like_choice_closer(text):
+        text = payment_reply(catalog, faq, messages)
+    elif menu_already and looks_like_menu_question(text):
+        if chose:
+            text = payment_reply(catalog, faq, messages)
+        else:
+            text = pick_fallback(recent + [text], AFTER_MENU_FALLBACKS)
 
-    # Empilement resume tarifs alors que grille deja donnee
     if tariff_already and looks_like_tariff_dump(text):
-        text = pick_fallback(recent + [text], AFTER_MENU_FALLBACKS)
+        if chose or asks_pay:
+            text = payment_reply(catalog, faq, messages)
+        else:
+            text = pick_fallback(recent + [text], AFTER_MENU_FALLBACKS)
 
-    # Prix deja donnes + nouveau menu dans la meme reponse longue: garder la partie non-menu si possible
     if menu_already and looks_like_tariff_dump(text) and looks_like_menu_question(text):
-        text = pick_fallback(recent + [text], AFTER_MENU_FALLBACKS)
+        text = payment_reply(catalog, faq, messages) if chose else pick_fallback(recent + [text], AFTER_MENU_FALLBACKS)
 
-    return smash_style(text)
+    return smash_style(fix_paypal_doublon(text))
 
-def dedupe_reply(text, recent_ai, *, max_attempts=5):
+def dedupe_reply(text, recent_ai, *, max_attempts=5, messages=None, catalog='', faq=''):
     """Evite de renvoyer une phrase deja dite; bascule sur un fallback diversifie."""
     text = smash_style(text or '')
+    if messages is not None:
+        clients = [m.get('text') or '' for m in messages if m.get('source') == 'client']
+        latest_client = clients[-1] if clients else ''
+        if client_asks_payment(latest_client) or (client_chose_presta(messages) and looks_like_choice_closer(text)):
+            return smash_style(payment_reply(catalog, faq, messages))
     banned_block = list(BANNED_FALLBACKS) + list(recent_ai or [])
     if text and is_banned_phrase(text):
         text = pick_fallback(banned_block, EMPTY_FALLBACKS)
@@ -310,13 +435,17 @@ def dedupe_reply(text, recent_ai, *, max_attempts=5):
         return text
     for _ in range(max_attempts):
         alt = pick_fallback(banned_block)
-        if is_banned_phrase(alt):
+        if is_banned_phrase(alt) or looks_like_choice_closer(alt):
+            # eviter de recycler les closers de choix agressifs
+            banned_block = list(banned_block) + [alt]
             continue
         if not is_too_similar(alt, recent_ai + ([text] if text else [])):
             return alt
         banned_block = list(banned_block) + [alt]
     alt = pick_fallback(banned_block, EMPTY_FALLBACKS)
-    return alt if not is_banned_phrase(alt) else 'et donc'
+    if is_banned_phrase(alt) or looks_like_choice_closer(alt):
+        return 'ok'
+    return alt
 
 DEFAULTS = {'enabled': False, 'tone': 'cash directe closer pas de rp gratuit', 'catalog': '', 'faq': '', 'daily_limit': 100, 'glossary': []}
 BASE_PROMPT = '''Tu parles au nom de ce compte Telegram, a la premiere personne.
@@ -357,8 +486,10 @@ Si MEMOIRE dit tarif / avant-gout / menu deja donne: avance.
 Interdit de recopier ta derniere reponse.
 
 CLOSER
-Pousse un choix concret sauf si il vient de payer ou si le choix est deja clair.
+Pousse un choix concret SAUF si le client a deja choisi (cam/nudes/canal + prix) ou demande ou payer.
+Dans ces cas: UNIQUEMENT le lien PayPal de PRESTATIONS/FAQ (ex: PayPal paypal.me/...). Une seule fois le mot PayPal.
 N invente aucun prix hors PRESTATIONS/FAQ.
+N invente aucun lien PayPal hors PRESTATIONS/FAQ.
 
 AVANT-GOUT
 Le systeme envoie les videos. N invente pas d envoi.
@@ -382,13 +513,17 @@ HANDOFF_FALLBACKS = [
 BANNED_FALLBACKS = [
     'ok sois cash tu veux quoi',
     'sois cash tu veux quoi',
+    'balance ton choix',
+    'balance ton choix on avance',
+    'dis juste ce que tu book',
+    'et donc',
 ]
 
+# Soft only — pas de closer de choix agressif (sinon spam menu apres decision client)
 EMPTY_FALLBACKS = [
-    'et donc',
-    'tu veux laquelle',
-    'dis juste ce que tu book',
-    'balance ton choix',
+    'ok',
+    'dis moi',
+    'go',
+    'ok je suis la',
     'ok et ensuite',
-    'tu book quoi',
 ]
