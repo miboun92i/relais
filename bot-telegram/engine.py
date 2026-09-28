@@ -3,7 +3,7 @@ import asyncio, hashlib, logging, os, random
 from style import (
     smash_style, clip_reply, BASE_PROMPT, EMPTY_FALLBACKS,
     temporary_ai_error, HumanHandoffRequired, DailyLimitReached,
-    conversation_memory, dedupe_reply, pick_fallback,
+    conversation_memory, dedupe_reply, pick_fallback, sanitize_reply,
 )
 from tease import (
     apply_glossary, needs_payment_handoff, needs_human_output,
@@ -124,6 +124,19 @@ class Engine(AutoReplyMixin):
         print(f'Reponse automatique : rattrapage de {n} conversation(s) en attente.', flush=True)
         return n
 
+    def _teaser_will_send(self, chat_id, history, latest_client):
+        if not latest_client or not self.send_media or not self.get_active_teasers:
+            return False
+        if not client_wants_teaser(self.store, chat_id, latest_client):
+            return False
+        chat = self.store.chat(chat_id) or {}
+        sent = max(int(chat.get('tease_sent') or 0), teasers_sent_count(self.store, chat_id))
+        try:
+            active = list(self.get_active_teasers() or [])
+        except Exception:
+            active = []
+        return sent < len(active)
+
     async def draft(self, chat_id, *, manual_on_handoff=True):
         latest = self.store.messages(chat_id, 1)
         if latest and latest[-1]['source'] == 'client' and needs_payment_handoff(latest[-1]['text']):
@@ -140,6 +153,7 @@ class Engine(AutoReplyMixin):
                 if m['source'] == 'client':
                     latest_client = m['text']
                     break
+            teaser_sending_now = self._teaser_will_send(chat_id, history, latest_client)
             if latest_client and client_wants_teaser(self.store, chat_id, latest_client):
                 chat = self.store.chat(chat_id) or {}
                 sent = max(int(chat.get('tease_sent') or 0), teasers_sent_count(self.store, chat_id))
@@ -150,14 +164,20 @@ class Engine(AutoReplyMixin):
                     except Exception:
                         active = []
                 if not active:
-                    teaser_note = '\nCONTEXTE AVANT-GOUT\npas de video. tease verbal court.\n'
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\npas de video. tease verbal court sans promettre un envoi systeme.\n'
                 elif sent >= len(active):
                     teaser_note = '\nCONTEXTE AVANT-GOUT\ntoutes les videos du panel sont parties. refuse un tease de plus. oriente choix et paiement.\n'
+                elif teaser_sending_now:
+                    teaser_note = (
+                        '\nCONTEXTE AVANT-GOUT\n'
+                        'une video PART MAINTENANT. INTERDIT de dire "je peux t envoyer" / "je t envoie un tease". '
+                        'Texte court apres video: choix presta (nudes cam ou canal) ou flirt cash.\n'
+                    )
                 elif sent > 0:
-                    teaser_note = '\nCONTEXTE AVANT-GOUT\nune autre video du panel peut partir. texte tres court.\n'
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\nune autre video du panel peut partir. texte tres court. ne repropose pas un tease deja fait.\n'
                 else:
-                    teaser_note = '\nCONTEXTE AVANT-GOUT\nune video peut partir. texte tres court.\n'
-            memory_note = conversation_memory(history)
+                    teaser_note = '\nCONTEXTE AVANT-GOUT\nune video peut partir. texte tres court. ne promets pas un envoi si tu n es pas sur.\n'
+            memory_note = conversation_memory(history, teaser_sending_now=teaser_sending_now)
             prompt = (
                 BASE_PROMPT
                 + teaser_note
@@ -200,6 +220,7 @@ class Engine(AutoReplyMixin):
                     self.set_mode(chat_id, 'manual')
                     raise HumanHandoffRequired('Le client dit avoir paye ou envoie une preuve. Reprenez pour encaisser.')
                 text = text.replace('[RELAIS_HUMAIN]', '').replace('[relais_humain]', '').strip() or pick_fallback(recent_ai)
-            text = smash_style(clip_reply(text, max_words=12))
+            text = smash_style(clip_reply(text, max_words=14, soft_max=22))
+            text = sanitize_reply(text, history, teaser_sending_now=teaser_sending_now)
             text = dedupe_reply(text, recent_ai)
             return smash_style(text)[:4000]

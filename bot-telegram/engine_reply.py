@@ -1,6 +1,6 @@
 """Envoi des reponses auto: lu -> court delai -> typing (pendant draft) -> send."""
 import asyncio, logging, random
-from style import smash_style, HANDOFF_FALLBACKS, HumanHandoffRequired, DailyLimitReached, pick_fallback
+from style import smash_style, HANDOFF_FALLBACKS, HumanHandoffRequired, DailyLimitReached, pick_fallback, sanitize_reply, looks_like_tease_offer, POST_TEASE_FALLBACKS
 from tease import client_wants_teaser, teasers_sent_count, pick_teaser
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,7 @@ class AutoReplyMixin:
                             active = list(self.get_active_teasers() or [])
                         except Exception as error:
                             logger.exception('Teasers ; conversation %s : %s', chat_id, type(error).__name__)
+                    teaser_sent_now = False
                     if latest_client and client_wants_teaser(self.store, chat_id, latest_client) and sent < len(active) and self.send_media:
                         teaser = pick_teaser(active, sent)
                         path = (teaser.get('path') or teaser.get('filepath')) if teaser else None
@@ -107,9 +108,17 @@ class AutoReplyMixin:
                                 message_id = await self.send_media(chat_id, path, caption=None)
                                 self.store.add(chat_id, message_id, 'ai', '[Vidéo avant-goût]')
                                 self.store.mark_tease_sent(chat_id)
+                                teaser_sent_now = True
                                 print('Telegram : avant-gout video envoye.', flush=True)
                             except Exception as error:
                                 logger.exception('Envoi avant-gout echoue ; conversation %s : %s', chat_id, type(error).__name__)
+                    # Apres video: jamais "je peux t'envoyer un tease" — recentrer sur le choix
+                    if teaser_sent_now:
+                        hist = self.store.messages(chat_id, 12)
+                        reply = sanitize_reply(reply, hist, teaser_sending_now=True)
+                        if looks_like_tease_offer(reply):
+                            recent = [m['text'] for m in hist if m.get('source') == 'ai']
+                            reply = smash_style(pick_fallback(recent, POST_TEASE_FALLBACKS))
                     message_id = await self.transport(chat_id, reply)
                     self.store.add(chat_id, message_id, 'ai', reply)
                 except Exception:

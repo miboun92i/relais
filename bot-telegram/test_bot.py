@@ -7,7 +7,8 @@ from aiohttp.test_utils import TestClient, TestServer
 from core import Store, Engine
 from style import (
     conversation_memory, dedupe_reply, is_too_similar, pick_fallback,
-    EMPTY_FALLBACKS, BASE_PROMPT,
+    EMPTY_FALLBACKS, BASE_PROMPT, clip_reply, sanitize_reply,
+    looks_like_tease_offer, looks_like_menu_question, looks_like_tariff_dump,
 )
 from main import make_app
 from auth import Auth, LoginFailed, TooManyAttempts, create_account
@@ -245,6 +246,54 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(text.strip())
         self.assertNotEqual(text, EMPTY_FALLBACKS[0])
 
+
+    async def test_draft_rewrites_tease_offer_when_video_will_send(self):
+        async def generate(prompt, messages):
+            self.assertIn('PART MAINTENANT', prompt)
+            return "je peux t'envoyer un petit tease"
+        async def send_media(chat_id, path, caption=None):
+            return 900
+        self.engine.generate = generate
+        self.engine.send_media = send_media
+        self.engine.get_active_teasers = lambda: [{'id': 't1', 'path': '/tmp/x.mp4', 'primary': True, 'created': 1}]
+        self.store.add(1, 2, 'client', 'envoie un tease')
+        text = await self.engine.draft(1)
+        self.assertFalse(looks_like_tease_offer(text))
+
+    async def test_auto_reply_after_teaser_not_offer_tease(self):
+        order = []
+        async def generate(prompt, messages):
+            return "je peux t'envoyer un petit tease"
+        async def send_media(chat_id, path, caption=None):
+            order.append('media')
+            return 901
+        async def send(chat_id, text):
+            order.append(('text', text))
+            return 902
+        self.store.add(1, 2, 'client', 'montre un apercu')
+        self.engine.generate = generate
+        self.engine.send_media = send_media
+        self.engine.transport = send
+        self.engine.get_active_teasers = lambda: [{'id': 't1', 'path': '/tmp/x.mp4', 'primary': True, 'created': 1}]
+        self.engine.simulate_typing = None
+        await self.engine.auto_reply(1, self.store.chat(1)['revision'], self.engine.epoch)
+        self.assertIn('media', order)
+        texts = [item[1] for item in order if isinstance(item, tuple) and item[0] == 'text']
+        self.assertEqual(len(texts), 1)
+        self.assertFalse(looks_like_tease_offer(texts[0]))
+
+    async def test_draft_anti_menu_when_already_proposed(self):
+        self.store.add(1, 2, 'ai', 'nudes cam ou canal tu prends quoi')
+        self.store.add(1, 3, 'ai', 'nudes 25 cam 20 canal 50')
+        self.store.add(1, 4, 'client', 'et pour une scene')
+        async def generate(prompt, messages):
+            self.assertIn('menu nudes/cam/canal DEJA', prompt)
+            return 'nudes cam ou canal tu prends quoi'
+        self.engine.generate = generate
+        text = await self.engine.draft(1)
+        self.assertFalse(looks_like_menu_question(text))
+
+
     async def test_catch_up_pending_queues_waiting_chats(self):
         self.store.ensure(2, 'Autre')
         self.store.add(2, 1, 'client', 'yo')
@@ -305,11 +354,51 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
 class StyleHelperTests(unittest.TestCase):
     def test_base_prompt_has_anti_repetition(self):
         self.assertIn('ANTI-REPETITION', BASE_PROMPT)
+        self.assertIn('ANTI-MENU', BASE_PROMPT)
         self.assertNotIn('tu papotes. tu prends nudes cam ou canal ?', BASE_PROMPT)
 
     def test_is_too_similar_detects_near_duplicates(self):
         self.assertTrue(is_too_similar('tu prends nudes cam ou canal', ['nudes cam ou canal tu prends quoi']))
         self.assertFalse(is_too_similar('ok paypal envoie', ['nudes cam ou canal tu prends quoi']))
+
+    def test_clip_reply_never_leaves_dangling_les(self):
+        # Ancien bug: "ca se fait en cam 20e les" (coupe mid-phrase)
+        longish = 'ca se fait en cam 20e les 10 min tu prends maintenant mon coeur vite svp'
+        out = clip_reply(longish, max_words=12)
+        self.assertFalse(out.rstrip('?').endswith(' les'))
+        self.assertFalse(out.rstrip('?').endswith(' de'))
+        self.assertIn('20e', out)
+        self.assertIn('10 min', out)
+        complete = 'ca se fait en cam 20e les 10 min tu prends ?'
+        self.assertEqual(clip_reply(complete, max_words=12), complete)
+        # Texte deja coupe foireusement: on retire le dangling
+        broken = clip_reply('ca se fait en cam 20e les', max_words=12)
+        self.assertFalse(broken.endswith('les'))
+
+    def test_clip_reply_keeps_tarif_paypal_together(self):
+        text = 'nudes 25e cam 20e canal 50e PayPal paypal.me/demo go'
+        out = clip_reply(text, max_words=12, soft_max=22)
+        self.assertIn('PayPal', out)
+        self.assertIn('paypal.me/demo', out)
+        self.assertIn('25e', out)
+
+    def test_sanitize_blocks_menu_replay_and_tariff_stack(self):
+        hist = [
+            {'source': 'ai', 'text': 'nudes 25 cam 20 canal 50'},
+            {'source': 'ai', 'text': 'nudes cam ou canal tu prends quoi'},
+        ]
+        out = sanitize_reply('nudes cam ou canal tu prends quoi', hist)
+        self.assertFalse(looks_like_menu_question(out))
+        dump = sanitize_reply('nudes 25e cam 20e canal 50e tout compris', hist)
+        self.assertFalse(looks_like_tariff_dump(dump))
+
+    def test_sanitize_blocks_tease_offer_after_video(self):
+        hist = [{'source': 'ai', 'text': '[Vidéo avant-goût]'}]
+        offer = "je peux t'envoyer un petit tease"
+        self.assertTrue(looks_like_tease_offer(offer))
+        out = sanitize_reply(offer, hist, teaser_sending_now=True)
+        self.assertFalse(looks_like_tease_offer(out))
+        self.assertTrue(out.strip())
 
 
 class AuthTests(unittest.IsolatedAsyncioTestCase):
